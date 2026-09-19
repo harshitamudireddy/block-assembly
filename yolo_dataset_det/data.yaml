@@ -1,0 +1,8 @@
+path: .
+train: images/train
+val: images/val
+names:
+  0: blue_block
+  1: green_block
+  2: red_block
+  3: yellow_block

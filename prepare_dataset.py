@@ -95,7 +95,7 @@ def prepare_detection_dataset(detector):
 
     # Write data.yaml for YOLO detection training
     data_yaml = {
-        "path": os.path.abspath(DET_DATASET_DIR),
+        "path": ".",
         "train": "images/train",
         "val": "images/val",
         "names": {i: name for i, name in enumerate(BLOCK_CLASSES)},

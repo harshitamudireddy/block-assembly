@@ -17,20 +17,9 @@ yolov8*.pt
 runs_detect/
 runs_classify/
 
-# Raw video recordings & extracted datasets
-DATASET/
-videos/
-*.mp4
-*.mov
-*.avi
-*.mkv
-
-# Extracted frames and generated YOLO datasets
+# Temporary outputs and intermediate extraction dump
 demo_output.jpg
 extracted_frames/
-yolo_dataset/
-yolo_dataset_det/
-yolo_dataset_cls/
 
 # IDE & Editor configs
 .idea/
