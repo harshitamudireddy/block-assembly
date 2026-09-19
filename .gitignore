@@ -1,0 +1,43 @@
+# Virtual environment
+.venv/
+venv/
+env/
+ENV/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+
+# Pretrained base weights & training runs
+yolov8*.pt
+*.pt
+runs_detect/
+runs_classify/
+
+# Raw video recordings & extracted datasets
+DATASET/
+videos/
+*.mp4
+*.mov
+*.avi
+*.mkv
+
+# Extracted frames and generated YOLO datasets
+demo_output.jpg
+extracted_frames/
+yolo_dataset/
+yolo_dataset_det/
+yolo_dataset_cls/
+
+# IDE & Editor configs
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Operating System files
+Thumbs.db
+.DS_Store
