@@ -50,7 +50,7 @@ class ComponentDetector:
         if img is None:
             return {
                 "error": "Failed to read image",
-                "predicted_state": "state_0_unstarted",
+                "predicted_state": "state0",
                 "confidence": 0.0,
                 "is_valid": False,
                 "diagnostic": "Image load failure",
@@ -100,12 +100,12 @@ class ComponentDetector:
             expected_block = None
             if next_idx == 1:
                 expected_block = "green_block"
-            elif next_idx in [2, 6]:
-                expected_block = "red_block"
-            elif next_idx in [3, 7]:
-                expected_block = "yellow_block"
-            elif next_idx == 4:
+            elif next_idx == 2:
                 expected_block = "blue_block"
+            elif next_idx == 3:
+                expected_block = "red_block"
+            elif next_idx == 4:
+                expected_block = "yellow_block"
 
             is_expected = (expected_block is None) or (incoming_cls == expected_block)
             incoming_info = {

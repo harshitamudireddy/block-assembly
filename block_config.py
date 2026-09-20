@@ -29,108 +29,103 @@ BLOCK_COLORS_BGR = {
 
 # Sequential Assembly States
 ASSEMBLY_STATES = [
-    "state_0_unstarted",
-    "state_1_blue_green",
-    "state_2_red_attached",
-    "state_3_yellow_attached",
-    "state_4_blue2_attached",
-    "state_5_mid_assembly",
-    "state_6_red2_attached",
-    "state_7_yellow2_attached",
-    "state_8_complete",
+    "state0",
+    "state1",
+    "state2",
+    "state3",
+    "state4",
+    "state5",
+    "state6",
+    "state7",
+    "state8",
 ]
 
 # Human-readable step titles for HUD
 STEP_TITLES = {
-    "state_0_unstarted": "0. Unstarted / Parts Stage",
-    "state_1_blue_green": "1. Blue + Green Base",
-    "state_2_red_attached": "2. Red Side Block",
-    "state_3_yellow_attached": "3. Yellow Front Block",
-    "state_4_blue2_attached": "4. Second Blue Block",
-    "state_5_mid_assembly": "5. Mid Joint Assembly",
-    "state_6_red2_attached": "6. Second Red Block",
-    "state_7_yellow2_attached": "7. Second Yellow Block",
-    "state_8_complete": "8. Complete Assembly",
+    "state0": "0. Unstarted / Parts Stage",
+    "state1": "1. Blue + Green Base",
+    "state2": "2. Two Blue + Green",
+    "state3": "3. Red Block Attached",
+    "state4": "4. Yellow Block Attached",
+    "state5": "5. Stage 5 Assembly",
+    "state6": "6. Stage 6 Assembly",
+    "state7": "7. Stage 7 Assembly",
+    "state8": "8. Complete Assembly",
 }
 
-# Mapping of the 12 WhatsApp dataset videos to parts or states
+# Mapping of dataset videos to parts or states according to their video names
 VIDEO_MAPPING = {
-    "WhatsApp Video 2026-09-19 at 19.08.02.mp4": {
+    "blue_block.mp4": {
         "type": "part",
         "target": "blue_block",
-        "desc": "Single Blue Block in hand"
+        "desc": "Single Blue Block in hand",
     },
-    "WhatsApp Video 2026-09-19 at 19.08.03 (1).mp4": {
-        "type": "part",
-        "target": "red_block",
-        "desc": "Single Red Block in hand"
-    },
-    "WhatsApp Video 2026-09-19 at 19.08.03 (2).mp4": {
-        "type": "part",
-        "target": "yellow_block",
-        "desc": "Single Yellow Block in hand"
-    },
-    "WhatsApp Video 2026-09-19 at 19.08.03.mp4": {
+    "green_block.mp4": {
         "type": "part",
         "target": "green_block",
-        "desc": "Single Green Block in hand"
+        "desc": "Single Green Block in hand",
     },
-    "WhatsApp Video 2026-09-19 at 19.08.37.mp4": {
-        "type": "state",
-        "target": "state_1_blue_green",
-        "desc": "Step 1: Green block connected to Blue base"
+    "red_block.mp4": {
+        "type": "part",
+        "target": "red_block",
+        "desc": "Single Red Block in hand",
     },
-    "WhatsApp Video 2026-09-19 at 19.08.38 (1).mp4": {
-        "type": "state",
-        "target": "state_2_red_attached",
-        "desc": "Step 2: Red block attached"
+    "yellow_block.mp4": {
+        "type": "part",
+        "target": "yellow_block",
+        "desc": "Single Yellow Block in hand",
     },
-    "WhatsApp Video 2026-09-19 at 19.08.38 (2).mp4": {
+    "state1.mp4": {
         "type": "state",
-        "target": "state_3_yellow_attached",
-        "desc": "Step 3: Yellow block attached to base"
+        "target": "state1",
+        "desc": "Step 1: Green block connected to Blue base",
     },
-    "WhatsApp Video 2026-09-19 at 19.08.38 (3).mp4": {
+    "state2.mp4": {
         "type": "state",
-        "target": "state_4_blue2_attached",
-        "desc": "Step 4: Second blue block attached"
+        "target": "state2",
+        "desc": "Step 2: Second Blue block attached to Green block",
     },
-    "WhatsApp Video 2026-09-19 at 19.08.38.mp4": {
+    "state3.mp4": {
         "type": "state",
-        "target": "state_5_mid_assembly",
-        "desc": "Step 5: Mid-assembly structure"
+        "target": "state3",
+        "desc": "Step 3: Red block attached to Green block",
     },
-    "WhatsApp Video 2026-09-19 at 19.08.39 (1).mp4": {
+    "state4.mp4": {
         "type": "state",
-        "target": "state_6_red2_attached",
-        "desc": "Step 6: Second red block attached"
+        "target": "state4",
+        "desc": "Step 4: Yellow block attached to assembly",
     },
-    "WhatsApp Video 2026-09-19 at 20.08.39 (2).mp4": {
+    "state5.mp4": {
         "type": "state",
-        "target": "state_7_yellow2_attached",
-        "desc": "Step 7: Second yellow block attached"
+        "target": "state5",
+        "desc": "Step 5: Intermediate assembly stage",
     },
-    "WhatsApp Video 2026-09-19 at 19.08.39 (2).mp4": {
+    "state6.mp4": {
         "type": "state",
-        "target": "state_7_yellow2_attached",
-        "desc": "Step 7: Second yellow block attached"
+        "target": "state6",
+        "desc": "Step 6: Secondary blocks attached",
     },
-    "WhatsApp Video 2026-09-19 at 19.08.39.mp4": {
+    "state7.mp4": {
         "type": "state",
-        "target": "state_8_complete",
-        "desc": "Step 8: Fully completed 9-part block assembly"
+        "target": "state7",
+        "desc": "Step 7: Sub-assembly near completion",
+    },
+    "state8.mp4": {
+        "type": "state",
+        "target": "state8",
+        "desc": "Step 8: Fully completed assembly",
     },
 }
 
 # Expected parts count per state
 EXPECTED_PARTS_PER_STATE = {
-    "state_0_unstarted": {"min_total": 0, "parts": {}},
-    "state_1_blue_green": {"min_total": 2, "parts": {"blue_block": 1, "green_block": 1}},
-    "state_2_red_attached": {"min_total": 3, "parts": {"blue_block": 1, "green_block": 1, "red_block": 1}},
-    "state_3_yellow_attached": {"min_total": 4, "parts": {"blue_block": 1, "green_block": 1, "red_block": 1, "yellow_block": 1}},
-    "state_4_blue2_attached": {"min_total": 5, "parts": {"blue_block": 2, "green_block": 1, "red_block": 1, "yellow_block": 1}},
-    "state_5_mid_assembly": {"min_total": 6, "parts": {"blue_block": 2, "green_block": 1, "red_block": 1, "yellow_block": 1}},
-    "state_6_red2_attached": {"min_total": 7, "parts": {"blue_block": 2, "green_block": 1, "red_block": 2, "yellow_block": 1}},
-    "state_7_yellow2_attached": {"min_total": 8, "parts": {"blue_block": 2, "green_block": 1, "red_block": 2, "yellow_block": 2}},
-    "state_8_complete": {"min_total": 8, "parts": {"blue_block": 2, "green_block": 1, "red_block": 2, "yellow_block": 2}},
+    "state0": {"min_total": 0, "parts": {}},
+    "state1": {"min_total": 2, "parts": {"blue_block": 1, "green_block": 1}},
+    "state2": {"min_total": 3, "parts": {"blue_block": 2, "green_block": 1}},
+    "state3": {"min_total": 4, "parts": {"blue_block": 2, "green_block": 1, "red_block": 1}},
+    "state4": {"min_total": 5, "parts": {"blue_block": 2, "green_block": 1, "red_block": 1, "yellow_block": 1}},
+    "state5": {"min_total": 5, "parts": {"blue_block": 2, "green_block": 1}},
+    "state6": {"min_total": 6, "parts": {"blue_block": 2, "green_block": 1}},
+    "state7": {"min_total": 7, "parts": {"blue_block": 2, "green_block": 1}},
+    "state8": {"min_total": 8, "parts": {"blue_block": 2, "green_block": 1}},
 }

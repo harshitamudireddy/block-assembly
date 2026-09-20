@@ -61,7 +61,7 @@ class AssemblyGraph:
         """
         if not detections:
             return {
-                "inferred_state": "state_0_unstarted",
+                "inferred_state": "state0",
                 "confidence": 0.0,
                 "is_valid": True,
                 "diagnostic": "No blocks detected in workspace",
@@ -82,7 +82,7 @@ class AssemblyGraph:
         total_blocks = len(detections)
 
         # 2. Check each assembly stage starting from most advanced down to base
-        inferred_state = "state_0_unstarted"
+        inferred_state = "state0"
         best_match_score = 0.0
         diagnostic = "Workspace active"
         is_valid = True
@@ -108,7 +108,7 @@ class AssemblyGraph:
                 break
 
         # 3. Spatial Relationship Checks for the Inferred State
-        if inferred_state == "state_1_blue_green":
+        if inferred_state == "state1":
             blue_boxes = parts_by_class.get("blue_block", [])
             green_boxes = parts_by_class.get("green_block", [])
             if blue_boxes and green_boxes:
@@ -120,19 +120,21 @@ class AssemblyGraph:
                 else:
                     diagnostic = "PASS: Blue + Green base securely assembled"
 
-        elif inferred_state == "state_2_red_attached":
-            red_boxes = parts_by_class.get("red_block", [])
+        elif inferred_state == "state2":
+            blue_boxes = parts_by_class.get("blue_block", [])
             green_boxes = parts_by_class.get("green_block", [])
-            if red_boxes and green_boxes:
-                adj = are_adjacent(red_boxes[0]["bbox"], green_boxes[0]["bbox"])
-                spatial_checks.append({"rule": "Red-Green Adjacency", "passed": adj})
+            if len(blue_boxes) >= 2 and green_boxes:
+                adj1 = are_adjacent(blue_boxes[0]["bbox"], green_boxes[0]["bbox"])
+                adj2 = are_adjacent(blue_boxes[1]["bbox"], green_boxes[0]["bbox"])
+                adj = adj1 and adj2
+                spatial_checks.append({"rule": "Two Blue Blocks to Green Adjacency", "passed": adj})
                 if not adj:
                     is_valid = False
-                    diagnostic = "ALIGNMENT: Red block not connected to Green block"
+                    diagnostic = "ALIGNMENT: Both Blue blocks must be attached to Green block"
                 else:
-                    diagnostic = "PASS: Red block attached correctly"
+                    diagnostic = "PASS: Two Blue blocks attached to Green block"
 
-        elif inferred_state in ["state_3_yellow_attached", "state_4_blue2_attached", "state_5_mid_assembly"]:
+        elif inferred_state in ["state3", "state4", "state5"]:
             # Check cluster connectivity across all parts
             connected = True
             for i in range(len(detections) - 1):
@@ -142,14 +144,14 @@ class AssemblyGraph:
                 if not has_adj:
                     connected = False
                     break
-            spatial_checks.append({"rule": "Full Assembly Connectivity", "passed": connected})
+            spatial_checks.append({"rule": "Assembly Connectivity", "passed": connected})
             if not connected:
                 is_valid = False
                 diagnostic = "LOOSE PART: One or more blocks are detached from the assembly"
             else:
                 diagnostic = f"PASS: {STEP_TITLES.get(inferred_state, inferred_state)} satisfied"
 
-        elif inferred_state in ["state_6_red2_attached", "state_7_yellow2_attached", "state_8_complete"]:
+        elif inferred_state in ["state6", "state7", "state8"]:
             connected = True
             for i in range(len(detections)):
                 boxA = detections[i]["bbox"]
@@ -162,7 +164,7 @@ class AssemblyGraph:
                 is_valid = False
                 diagnostic = "STRUCTURAL DEFECT: Blocks are detached or misaligned"
             else:
-                diagnostic = "PASS: Complete 9-part block structure verified!"
+                diagnostic = "PASS: Complete block structure verified!"
 
         # Confidence: average detection confidence of participating parts
         conf = float(np.mean([d["confidence"] for d in detections])) if detections else 0.0

@@ -35,7 +35,7 @@ def draw_hud(frame, result, state_machine, smoothed=True):
     h, w = frame.shape[:2]
     overlay = frame.copy()
 
-    state = result.get("predicted_state", "state_0_unstarted")
+    state = result.get("predicted_state", "state0")
     conf = result.get("confidence", 0.0)
     is_valid = result.get("is_valid", True)
     diagnostic = result.get("diagnostic", "")
