@@ -256,7 +256,7 @@ class AssemblyGraph:
                         }
                 else:
                     return {
-                        "inferred_state": "state_1_greenblue",
+                        "inferred_state": "state_0_unstarted",
                         "confidence": 0.90,
                         "is_valid": False,
                         "diagnostic": "ASSEMBLING: Green beam detected. Please introduce 1st Blue foot.",

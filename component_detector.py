@@ -636,7 +636,7 @@ class ComponentDetector:
             cand_pred = res_cls.names[res_cls.probs.top1]
             cand_conf = float(res_cls.probs.top1conf)
 
-            # Sanity-check: if YOLO missed a faint yellow or red block, verify with plastic color detection in crop
+            # Sanity-check: if YOLO missed a faint yellow, red, or blue block, verify with plastic color detection in crop
             if cand_conf >= 0.70 and crop_img is not None and crop_img.size > 0:
                 if cand_pred in ["state_4_yellowred", "state_5_bothred", "state_6_yellowafter2red", "state_7_finalred", "state_8_complete"] and "yellow_block" not in det_colors:
                     crop_colors = self.block_detector.detect_color_plastic(crop_img)
@@ -646,16 +646,30 @@ class ComponentDetector:
                     crop_colors = self.block_detector.detect_color_plastic(crop_img)
                     if any(c["class_name"] == "red_block" for c in crop_colors):
                         det_colors.add("red_block")
+                if cand_pred in ["state_1_greenblue", "state_2_green2blue", "state_3_first_red", "state_4_yellowred", "state_5_bothred"] and "blue_block" not in det_colors:
+                    crop_colors = self.block_detector.detect_color_plastic(crop_img)
+                    if any(c["class_name"] == "blue_block" for c in crop_colors):
+                        det_colors.add("blue_block")
 
             is_physically_consistent = True
+            # Physical Invariant 1: Any state with blue foot MUST have blue_block and green_block
+            if cand_pred in ["state_1_greenblue", "state_2_green2blue"]:
+                if "blue_block" not in det_colors or "green_block" not in det_colors:
+                    is_physically_consistent = False
+
+            # Physical Invariant 2: Red stages MUST have red_block
             if cand_pred in ["state_3_first_red", "state_4_yellowred", "state_5_bothred", "state_6_yellowafter2red", "state_7_finalred", "state_8_complete"]:
-                if "red_block" not in det_colors and cand_conf < 0.90:
+                if "red_block" not in det_colors:
                     is_physically_consistent = False
+
+            # Physical Invariant 3: Yellow stages MUST have yellow_block
             if cand_pred in ["state_4_yellowred", "state_5_bothred", "state_6_yellowafter2red", "state_7_finalred", "state_8_complete"]:
-                if "yellow_block" not in det_colors and cand_conf < 0.90:
+                if "yellow_block" not in det_colors:
                     is_physically_consistent = False
-            if cand_pred in ["state_1_greenblue", "state_2_green2blue", "state_3_first_red"] and len(cleaned_detections) < 4:
-                if "green_block" not in det_colors and cand_conf < 0.90:
+
+            # Physical Invariant 4: Base & mid stages MUST have green_block
+            if cand_pred in ["state_1_greenblue", "state_2_green2blue", "state_3_first_red", "state_4_yellowred", "state_5_bothred"]:
+                if "green_block" not in det_colors:
                     is_physically_consistent = False
 
             if is_physically_consistent:
@@ -696,25 +710,24 @@ class ComponentDetector:
 
         # Dual-Perception: Corroborate with classifier
         if cls_pred is not None:
-            # Check if spatial graph flagged an explicit physical violation (e.g. feet on opposite sides, illegal attachment)
+            # Check if spatial graph flagged an explicit physical violation or incomplete assembly
             is_explicit_violation = (not is_valid) and any(
-                diagnostic.startswith(prefix) for prefix in ["INCORRECT", "WRONG"]
+                diagnostic.startswith(prefix) for prefix in ["INCORRECT", "WRONG", "ASSEMBLING"]
             )
 
             next_state = ASSEMBLY_STATES[current_step_index + 1] if current_step_index + 1 < len(ASSEMBLY_STATES) else None
 
-            # 1. High-confidence cropped classifier corroboration for target state or next step
-            # Can resolve bounding box clustering/overlap ambiguities, but CANNOT override an explicit physical defect!
+            # High-confidence cropped classifier corroboration for target state or next step
+            # Can resolve bounding box clustering/overlap ambiguities, but CANNOT override an incomplete or violated assembly!
             if not is_explicit_violation:
                 if cls_conf >= 0.48 and cls_pred == target_state:
                     inferred_state = cls_pred
                     conf = max(conf, cls_conf)
                     is_valid = True
                     diagnostic = f"PASS: {target_state} verified by inspection ({cls_conf*100:.1f}%)"
-                elif cls_conf >= 0.75 and cls_pred == next_state and (is_valid or not diagnostic.startswith("INCORRECT")):
+                elif cls_conf >= 0.75 and cls_pred == next_state and is_valid:
                     inferred_state = cls_pred
                     conf = max(conf, cls_conf)
-                    is_valid = True
                     diagnostic = f"PASS: Advanced to {next_state} verified by inspection ({cls_conf*100:.1f}%)"
             elif is_valid:
                 if graph_eval["inferred_state"] == cls_pred:
