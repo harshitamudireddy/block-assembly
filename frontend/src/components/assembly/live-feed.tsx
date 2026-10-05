@@ -46,6 +46,15 @@ export function LiveFeed({ className }: { className?: string }) {
     return DEFAULT_RAW_CAMERA_URL;
   });
 
+  const [cameraIndex, setCameraIndex] = useState<string>(() => {
+    if (typeof window !== "undefined") {
+      return (
+        localStorage.getItem("block_assembly_camera_index") || "1"
+      );
+    }
+    return "1";
+  });
+
   const [streamStatus, setStreamStatus] = useState<
     "streaming" | "waiting" | "offline"
   >("waiting");
@@ -58,6 +67,7 @@ export function LiveFeed({ className }: { className?: string }) {
   // Settings form input states
   const [inputBackendUrl, setInputBackendUrl] = useState<string>(backendUrl);
   const [inputRawUrl, setInputRawUrl] = useState<string>(rawCameraUrl);
+  const [inputCameraIndex, setInputCameraIndex] = useState<string>(cameraIndex);
 
   const checkBackendHealth = useCallback(async () => {
     try {
@@ -123,10 +133,13 @@ export function LiveFeed({ className }: { className?: string }) {
   const handleSaveSettings = () => {
     const cleanBackend = inputBackendUrl.trim().replace(/\/+$/, "");
     const cleanRaw = inputRawUrl.trim();
+    const cleanCamera = inputCameraIndex.trim() || "1";
     setBackendUrl(cleanBackend);
     setRawCameraUrl(cleanRaw);
+    setCameraIndex(cleanCamera);
     localStorage.setItem("block_assembly_backend_url", cleanBackend);
     localStorage.setItem("droidcam_stream_url", cleanRaw);
+    localStorage.setItem("block_assembly_camera_index", cleanCamera);
     setShowSettings(false);
     reloadStream();
   };
@@ -134,15 +147,18 @@ export function LiveFeed({ className }: { className?: string }) {
   const handleResetSettings = () => {
     setInputBackendUrl(DEFAULT_BACKEND_URL);
     setInputRawUrl(DEFAULT_RAW_CAMERA_URL);
+    setInputCameraIndex("1");
     setBackendUrl(DEFAULT_BACKEND_URL);
     setRawCameraUrl(DEFAULT_RAW_CAMERA_URL);
+    setCameraIndex("1");
     localStorage.removeItem("block_assembly_backend_url");
     localStorage.removeItem("droidcam_stream_url");
+    localStorage.removeItem("block_assembly_camera_index");
     setShowSettings(false);
     reloadStream();
   };
 
-  const runCommand = `python live_demo.py --camera phone --dashboard ${backendUrl}`;
+  const runCommand = `python live_demo.py --camera ${cameraIndex} --dashboard ${backendUrl}`;
 
   const copyCommand = async () => {
     try {
@@ -297,7 +313,7 @@ export function LiveFeed({ className }: { className?: string }) {
           <div className="font-semibold text-foreground mb-2">
             Camera & Telemetry Stream Configuration
           </div>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <div>
               <label className="text-muted-foreground block mb-1">
                 FastAPI Backend URL (HUD Stream Endpoint)
@@ -316,7 +332,25 @@ export function LiveFeed({ className }: { className?: string }) {
 
             <div>
               <label className="text-muted-foreground block mb-1">
-                Raw DroidCam / IP Stream URL
+                Inspection Camera Device
+              </label>
+              <select
+                value={inputCameraIndex}
+                onChange={(e) => setInputCameraIndex(e.target.value)}
+                className="w-full rounded-md border border-border bg-card px-2.5 py-1.5 text-xs text-foreground outline-none focus:border-primary font-mono"
+              >
+                <option value="1">Camera 1 (Attached Logitech C270)</option>
+                <option value="0">Camera 0 (Laptop Built-in Webcam)</option>
+                <option value="phone">Phone Camera (DroidCam URL)</option>
+              </select>
+              <span className="text-[10px] text-muted-foreground mt-0.5 block">
+                Flags: <code>--camera {inputCameraIndex}</code>
+              </span>
+            </div>
+
+            <div>
+              <label className="text-muted-foreground block mb-1">
+                Raw Camera / IP Stream URL
               </label>
               <input
                 type="text"
@@ -326,7 +360,7 @@ export function LiveFeed({ className }: { className?: string }) {
                 className="w-full rounded-md border border-border bg-card px-2.5 py-1.5 text-xs text-foreground outline-none focus:border-primary font-mono"
               />
               <span className="text-[10px] text-muted-foreground mt-0.5 block">
-                Direct phone stream for fallback
+                Direct stream for fallback preview
               </span>
             </div>
           </div>
@@ -399,14 +433,14 @@ export function LiveFeed({ className }: { className?: string }) {
 
               <h3 className="text-base font-bold text-white">
                 {streamMode === "hud"
-                  ? "AI HUD Stream Waiting for CV Detector"
+                  ? "AI HUD Stream Waiting for Webcam Detector"
                   : "Camera Feed Not Available"}
               </h3>
 
               <p className="mt-2 text-xs text-zinc-400">
                 {streamMode === "hud"
-                  ? "Start the computer vision inspection pipeline in your terminal to stream the real-time AI bounding boxes and state HUD:"
-                  : `Could not connect to direct camera at ${rawCameraUrl}. Check your camera WiFi or IP address.`}
+                  ? "Start the computer vision inspection pipeline with your attached webcam in your terminal to stream real-time AI bounding boxes and HUD:"
+                  : `Could not connect to direct camera at ${rawCameraUrl}. Check your camera device or connection.`}
               </p>
 
               {streamMode === "hud" && (
@@ -476,6 +510,9 @@ export function LiveFeed({ className }: { className?: string }) {
         <div className="flex items-center gap-2">
           <span className="font-semibold text-foreground">Backend:</span>
           <span className="font-mono">{backendUrl}</span>
+          <span className="text-border">•</span>
+          <span className="font-semibold text-foreground">Camera:</span>
+          <span className="font-mono">Webcam [{cameraIndex}]</span>
           <span className="text-border">•</span>
           <span className="font-semibold text-foreground">Stream:</span>
           <span>{streamMode === "hud" ? "/api/camera/hud_stream" : rawCameraUrl}</span>
