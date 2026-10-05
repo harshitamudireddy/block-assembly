@@ -344,10 +344,7 @@ class BlockDetector:
 
         refined = []
         for d in detections:
-            cname = d.get("class_name")
-            if cname == "blue_block" and current_step_index == 1:
-                refined.append(d)
-            elif cname in ("red_block", "blue_block"):
+            if d.get("class_name") in ("red_block", "blue_block"):
                 refined.extend(self.split_merged_block(d, img))
             else:
                 refined.append(d)

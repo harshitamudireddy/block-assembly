@@ -530,25 +530,10 @@ class ComponentDetector:
 
         gdet = greens[0] if greens else None
 
-        # 1. Blue feet: split wide/tall boxes covering both feet only when not strictly at Step 1 with single foot
-        if blues and img is not None and current_step_index != 1:
+        # 1. Blue feet: split wide/tall boxes covering both feet, then cluster stud halves
+        if blues and img is not None:
             blues = self.split_merged_blue_feet(blues, img, gdet)
         resolved_blues = self.cluster_feet_along_beam(blues, gdet) if len(blues) > 1 else blues
-        if current_step_index == 1 and len(resolved_blues) > 1 and gdet is not None:
-            # Step 1 physically has only 1 blue foot; cluster all blue stud slivers near green beam into one foot
-            bx1 = min(b["bbox"][0] for b in resolved_blues)
-            by1 = min(b["bbox"][1] for b in resolved_blues)
-            bx2 = max(b["bbox"][0] + b["bbox"][2] for b in resolved_blues)
-            by2 = max(b["bbox"][1] + b["bbox"][3] for b in resolved_blues)
-            resolved_blues = [{
-                "class_name": "blue_block",
-                "class_id": 0,
-                "bbox": (bx1, by1, bx2 - bx1, by2 - by1),
-                "center": (bx1 + (bx2 - bx1) // 2, by1 + (by2 - by1) // 2),
-                "area": (bx2 - bx1) * (by2 - by1),
-                "confidence": max(b["confidence"] for b in resolved_blues),
-                "source": "step1_clustered",
-            }]
 
         # 2. Red blocks: at Step 3, ensure any secondary stud detection on the 1st red block is merged
         if current_step_index == 3 and len(reds) > 1 and gdet is not None:
