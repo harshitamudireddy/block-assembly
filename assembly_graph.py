@@ -138,11 +138,13 @@ class AssemblyGraph:
         # --------------------------------------------------------------------------------
         if curr_idx is not None:
             # -------------------------------------------------------------------------
-            # UNIVERSAL TOPOLOGY INVARIANT 1: YELLOW BLOCK SEPARATION (Steps 0 - 7)
-            # In stages before completion, Tail and Neck must remain strictly separated by Red.
-            # In Step 8 (complete), the Crown yellow block can be adjacent to the Neck or Head red block.
+            # UNIVERSAL TOPOLOGY INVARIANT 1: YELLOW BLOCK SEPARATION
+            # In the animal figure, yellow blocks serve three strictly disjoint roles:
+            # Yellow 1 = Tail (at base), Yellow 2 = Neck (mid-body), Yellow 3 = Crown (head top).
+            # They are physically separated by the red torso and red head.
+            # NO TWO YELLOW BLOCKS EVER TOUCH EACH OTHER DIRECTLY.
             # -------------------------------------------------------------------------
-            if len(yellows) >= 2 and curr_idx < 8:
+            if len(yellows) >= 2:
                 for i in range(len(yellows)):
                     for j in range(i + 1, len(yellows)):
                         if are_adjacent(yellows[i]["bbox"], yellows[j]["bbox"], max_gap=25):
@@ -150,7 +152,7 @@ class AssemblyGraph:
                                 "inferred_state": current_target_step,
                                 "confidence": 0.95,
                                 "is_valid": False,
-                                "diagnostic": "INCORRECT ASSEMBLY: Yellow blocks are connected directly together! Tail and Neck must be separated by Red torso.",
+                                "diagnostic": "INCORRECT ASSEMBLY: Yellow blocks are connected directly together! Tail, Neck, and Crown must be separated by Red blocks.",
                                 "part_counts": part_counts,
                                 "spatial_checks": [{"rule": "Yellow Block Separation", "passed": False}],
                             }
@@ -256,7 +258,7 @@ class AssemblyGraph:
                         }
                 else:
                     return {
-                        "inferred_state": "state_0_unstarted",
+                        "inferred_state": "state_1_greenblue",
                         "confidence": 0.90,
                         "is_valid": False,
                         "diagnostic": "ASSEMBLING: Green beam detected. Please introduce 1st Blue foot.",
