@@ -1,18 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import {
-  Badge,
-  Btn,
-  Card,
-  Page,
-  td,
-  th,
-} from "@/components/assembly/ui";
+import { Badge, Btn, Card, Page, td, th } from "@/components/assembly/ui";
 import { supabase } from "@/integrations/supabase/client";
 import type { Database } from "@/integrations/supabase/types";
 
-type Operator =
-  Database["public"]["Tables"]["operators"]["Row"];
+type Operator = Database["public"]["Tables"]["operators"]["Row"];
 
 export const Route = createFileRoute("/_authenticated/operators")({
   head: () => ({
@@ -33,9 +25,7 @@ function Operators() {
   const [operators, setOperators] = useState<Operator[]>([]);
   const [loading, setLoading] = useState(true);
   const [savingId, setSavingId] = useState<string | null>(null);
-  const [editingGoal, setEditingGoal] = useState<
-    Record<string, string>
-  >({});
+  const [editingGoal, setEditingGoal] = useState<Record<string, string>>({});
 
   const [activeOperatorIds, setActiveOperatorIds] = useState<Set<string>>(new Set());
   const [todayOperatorIds, setTodayOperatorIds] = useState<Set<string>>(new Set());
@@ -55,24 +45,20 @@ function Operators() {
     const startOfToday = new Date();
     startOfToday.setHours(0, 0, 0, 0);
 
-    const [operatorsResult, activeSessionsResult, todaySessionsResult] =
-      await Promise.all([
-        supabase
-          .from("operators")
-          .select("*")
-          .order("role", { ascending: true })
-          .order("name", { ascending: true }),
+    const [operatorsResult, activeSessionsResult, todaySessionsResult] = await Promise.all([
+      supabase
+        .from("operators")
+        .select("*")
+        .order("role", { ascending: true })
+        .order("name", { ascending: true }),
 
-        supabase
-          .from("assembly_sessions")
-          .select("operator_id")
-          .eq("status", "in_progress"),
+      supabase.from("assembly_sessions").select("operator_id").eq("status", "in_progress"),
 
-        supabase
-          .from("assembly_sessions")
-          .select("operator_id")
-          .gte("start_time", startOfToday.toISOString()),
-      ]);
+      supabase
+        .from("assembly_sessions")
+        .select("operator_id")
+        .gte("start_time", startOfToday.toISOString()),
+    ]);
 
     if (operatorsResult.error) {
       console.error("Failed to load operators:", operatorsResult.error);
@@ -94,21 +80,13 @@ function Operators() {
 
     if (activeSessionsResult.data) {
       setActiveOperatorIds(
-        new Set(
-          activeSessionsResult.data
-            .map((s) => s.operator_id)
-            .filter(Boolean) as string[],
-        ),
+        new Set(activeSessionsResult.data.map((s) => s.operator_id).filter(Boolean) as string[]),
       );
     }
 
     if (todaySessionsResult.data) {
       setTodayOperatorIds(
-        new Set(
-          todaySessionsResult.data
-            .map((s) => s.operator_id)
-            .filter(Boolean) as string[],
-        ),
+        new Set(todaySessionsResult.data.map((s) => s.operator_id).filter(Boolean) as string[]),
       );
     }
 
@@ -164,11 +142,7 @@ function Operators() {
       window.alert("Failed to update the operator goal.");
     } else {
       setOperators((current) =>
-        current.map((item) =>
-          item.id === operator.id
-            ? { ...item, goal_per_day: value }
-            : item,
-        ),
+        current.map((item) => (item.id === operator.id ? { ...item, goal_per_day: value } : item)),
       );
     }
 
@@ -182,15 +156,13 @@ function Operators() {
     setAddingBusy(true);
     const goalVal = Number(newGoal) || 15;
 
-    const { error } = await supabase
-      .from("operators")
-      .insert({
-        name: newName.trim(),
-        email: newEmail.trim().toLowerCase() || null,
-        operator_code: newCode.trim().toUpperCase() || null,
-        role: newRole,
-        goal_per_day: goalVal,
-      });
+    const { error } = await supabase.from("operators").insert({
+      name: newName.trim(),
+      email: newEmail.trim().toLowerCase() || null,
+      operator_code: newCode.trim().toUpperCase() || null,
+      role: newRole,
+      goal_per_day: goalVal,
+    });
 
     if (error) {
       console.error("Failed to add operator:", error);
@@ -222,9 +194,7 @@ function Operators() {
               + Add Operator
             </button>
           )}
-          <Btn onClick={() => void loadOperators()}>
-            Refresh
-          </Btn>
+          <Btn onClick={() => void loadOperators()}>Refresh</Btn>
         </div>
       }
     >
@@ -282,27 +252,15 @@ function Operators() {
                   return (
                     <tr key={operator.id}>
                       <td className={td}>
-                        <div className="font-semibold">
-                          {operator.name}
-                        </div>
+                        <div className="font-semibold">{operator.name}</div>
                       </td>
 
-                      <td className={td}>
-                        {operator.operator_code ?? "—"}
-                      </td>
+                      <td className={td}>{operator.operator_code ?? "—"}</td>
+
+                      <td className={td}>{operator.email ?? "—"}</td>
 
                       <td className={td}>
-                        {operator.email ?? "—"}
-                      </td>
-
-                      <td className={td}>
-                        <Badge
-                          tone={
-                            operator.role === "manager"
-                              ? "success"
-                              : "success"
-                          }
-                        >
+                        <Badge tone={operator.role === "manager" ? "success" : "success"}>
                           {operator.role.toUpperCase()}
                         </Badge>
                       </td>
@@ -312,15 +270,11 @@ function Operators() {
                           <input
                             type="number"
                             min={1}
-                            value={
-                              editingGoal[operator.id] ??
-                              String(operator.goal_per_day)
-                            }
+                            value={editingGoal[operator.id] ?? String(operator.goal_per_day)}
                             onChange={(event) =>
                               setEditingGoal((current) => ({
                                 ...current,
-                                [operator.id]:
-                                  event.target.value,
+                                [operator.id]: event.target.value,
                               }))
                             }
                             className="h-9 w-24 rounded-md border border-border bg-background px-2 text-sm outline-none focus:border-ink"
@@ -336,39 +290,21 @@ function Operators() {
                           const isTodayActive = todayOperatorIds.has(operator.id);
 
                           if (isWorking) {
-                            return (
-                              <Badge tone="success">
-                                ACTIVE
-                              </Badge>
-                            );
+                            return <Badge tone="success">ACTIVE</Badge>;
                           }
 
                           if (isTodayActive) {
-                            return (
-                              <Badge tone="warning">
-                                IDLE
-                              </Badge>
-                            );
+                            return <Badge tone="warning">IDLE</Badge>;
                           }
 
-                          return (
-                            <Badge tone="danger">
-                              OFFLINE
-                            </Badge>
-                          );
+                          return <Badge tone="danger">OFFLINE</Badge>;
                         })()}
                       </td>
 
                       {isManager && (
                         <td className={td}>
-                          <Btn
-                            onClick={() =>
-                              void saveGoal(operator)
-                            }
-                          >
-                            {savingId === operator.id
-                              ? "Saving..."
-                              : "Save"}
+                          <Btn onClick={() => void saveGoal(operator)}>
+                            {savingId === operator.id ? "Saving..." : "Save"}
                           </Btn>
                         </td>
                       )}

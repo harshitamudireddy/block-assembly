@@ -69,6 +69,9 @@ export function LiveFeed({ className }: { className?: string }) {
   const [inputRawUrl, setInputRawUrl] = useState<string>(rawCameraUrl);
   const [inputCameraIndex, setInputCameraIndex] = useState<string>(cameraIndex);
 
+  const wasActiveRef = useRef<boolean>(false);
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const checkBackendHealth = useCallback(async () => {
     try {
       const res = await fetch(`${backendUrl}/health`, {
@@ -80,13 +83,24 @@ export function LiveFeed({ className }: { className?: string }) {
         setHudStreamActive(active);
 
         if (streamMode === "hud") {
-          setStreamStatus(active ? "streaming" : "waiting");
+          if (active) {
+            setStreamStatus("streaming");
+            // Automatically refresh the stream key if we just transitioned to active
+            if (!wasActiveRef.current) {
+              setStreamKey(Date.now());
+            }
+          } else {
+            setStreamStatus("waiting");
+          }
         }
+        wasActiveRef.current = active;
       } else {
+        wasActiveRef.current = false;
         setHudStreamActive(false);
         if (streamMode === "hud") setStreamStatus("offline");
       }
     } catch {
+      wasActiveRef.current = false;
       setHudStreamActive(false);
       if (streamMode === "hud") setStreamStatus("offline");
     }
@@ -98,7 +112,10 @@ export function LiveFeed({ className }: { className?: string }) {
     const timer = window.setInterval(() => {
       void checkBackendHealth();
     }, 3000);
-    return () => window.clearInterval(timer);
+    return () => {
+      window.clearInterval(timer);
+      if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+    };
   }, [checkBackendHealth]);
 
   // Sync fullscreen state
@@ -396,12 +413,14 @@ export function LiveFeed({ className }: { className?: string }) {
           }}
           onError={() => {
             if (streamMode === "hud") {
-              if (!hudStreamActive) {
-                setStreamStatus("waiting");
-              }
+              setStreamStatus(hudStreamActive ? "waiting" : "offline");
             } else {
               setStreamStatus("offline");
             }
+            if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+            retryTimerRef.current = setTimeout(() => {
+              setStreamKey(Date.now());
+            }, 3000);
           }}
           className={cn(
             "h-auto max-h-[560px] w-full object-contain transition-opacity duration-300",
@@ -433,13 +452,17 @@ export function LiveFeed({ className }: { className?: string }) {
 
               <h3 className="text-base font-bold text-white">
                 {streamMode === "hud"
-                  ? "AI HUD Stream Waiting for Webcam Detector"
+                  ? streamStatus === "offline"
+                    ? "FastAPI Performance Backend Offline"
+                    : "AI HUD Stream Waiting for CV Detector"
                   : "Camera Feed Not Available"}
               </h3>
 
               <p className="mt-2 text-xs text-zinc-400">
                 {streamMode === "hud"
-                  ? "Start the computer vision inspection pipeline with your attached webcam in your terminal to stream real-time AI bounding boxes and HUD:"
+                  ? streamStatus === "offline"
+                    ? `Cannot connect to FastAPI backend at ${backendUrl}. Ensure the backend is running (cd backend && uvicorn main:app --port 8000).`
+                    : "Backend is online! Start the computer vision inspection pipeline to stream live AI bounding boxes and HUD:"
                   : `Could not connect to direct camera at ${rawCameraUrl}. Check your camera device or connection.`}
               </p>
 

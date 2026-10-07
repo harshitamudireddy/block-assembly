@@ -164,7 +164,8 @@ class AssemblyGraph:
             # must NOT be attached directly to the blue feet.
             # -------------------------------------------------------------------------
             if curr_idx >= 6 and len(blues) >= 2 and len(yellows) >= 2:
-                yellows_touching_feet = [y for y in yellows if any(are_adjacent(y["bbox"], b["bbox"], max_gap=25) for b in blues)]
+                base_feet = [b for b in blues if not any(are_adjacent(b["bbox"], r["bbox"], max_gap=50) for r in reds)] if reds else blues
+                yellows_touching_feet = [y for y in yellows if any(are_adjacent(y["bbox"], b["bbox"], max_gap=25) for b in base_feet)]
                 if len(yellows_touching_feet) >= 2:
                     return {
                         "inferred_state": current_target_step,
@@ -177,15 +178,6 @@ class AssemblyGraph:
 
             # Step 0: Starting the assembly
             if curr_idx == 0:
-                if len(greens) == 0:
-                    return {
-                        "inferred_state": "state_0_unstarted",
-                        "confidence": 0.95,
-                        "is_valid": False,
-                        "diagnostic": f"INCORRECT PARTS: Missing Green beam! Found {len(blues)} Blue block(s). Step 1 requires 1 Green beam + 1 Blue foot.",
-                        "part_counts": part_counts,
-                        "spatial_checks": [{"rule": "Green Beam Present", "passed": False}],
-                    }
                 if len(reds) > 0 or len(yellows) > 0:
                     return {
                         "inferred_state": "state_0_unstarted",
@@ -195,8 +187,48 @@ class AssemblyGraph:
                         "part_counts": part_counts,
                         "spatial_checks": [{"rule": "Base Stage Parts Only", "passed": False}],
                     }
-                if len(blues) == 1:
-                    adj = are_adjacent(blues[0]["bbox"], greens[0]["bbox"], max_gap=32)
+
+                if len(greens) == 0:
+                    if len(blues) in [1, 2]:
+                        return {
+                            "inferred_state": "state_0_unstarted",
+                            "confidence": 0.90,
+                            "is_valid": True,
+                            "diagnostic": "ASSEMBLING: Blue foot detected. Please place Green beam to assemble Step 1.",
+                            "part_counts": part_counts,
+                            "spatial_checks": [{"rule": "Green Beam Pending", "passed": True}],
+                        }
+                    elif len(blues) > 2:
+                        return {
+                            "inferred_state": "state_0_unstarted",
+                            "confidence": 0.95,
+                            "is_valid": False,
+                            "diagnostic": f"INCORRECT PARTS: Found {len(blues)} Blue blocks. Step 1 requires 1 Green beam + 1 Blue foot.",
+                            "part_counts": part_counts,
+                            "spatial_checks": [{"rule": "Base Stage Parts Only", "passed": False}],
+                        }
+                    else:
+                        return {
+                            "inferred_state": "state_0_unstarted",
+                            "confidence": 0.90,
+                            "is_valid": True,
+                            "diagnostic": "Workspace clear (present 1 Green beam + 1 Blue foot to begin)",
+                            "part_counts": part_counts,
+                            "spatial_checks": [],
+                        }
+
+                if len(blues) == 0:
+                    return {
+                        "inferred_state": "state_0_unstarted",
+                        "confidence": 0.90,
+                        "is_valid": True,
+                        "diagnostic": "ASSEMBLING: Green beam detected. Please introduce 1st Blue foot.",
+                        "part_counts": part_counts,
+                        "spatial_checks": [{"rule": "Blue Foot Pending", "passed": True}],
+                    }
+
+                elif len(blues) == 1:
+                    adj = are_adjacent(blues[0]["bbox"], greens[0]["bbox"], max_gap=12)
                     spatial_checks.append({"rule": "Green-Blue Adjacency", "passed": adj})
                     if adj:
                         return {
@@ -209,7 +241,7 @@ class AssemblyGraph:
                         }
                     else:
                         return {
-                            "inferred_state": "state_1_greenblue",
+                            "inferred_state": "state_0_unstarted",
                             "confidence": 0.90,
                             "is_valid": False,
                             "diagnostic": "ASSEMBLING: Please attach Blue foot to Green beam",
@@ -219,7 +251,7 @@ class AssemblyGraph:
                 elif len(blues) >= 2:
                     # User directly presents 2-legged base
                     gbox = greens[0]["bbox"]
-                    att = [b for b in blues if are_adjacent(b["bbox"], gbox, max_gap=35)]
+                    att = [b for b in blues if are_adjacent(b["bbox"], gbox, max_gap=12)]
                     loose = [b for b in blues if b not in att]
 
                     is_horiz = gbox[2] >= gbox[3]
@@ -238,33 +270,24 @@ class AssemblyGraph:
                             "part_counts": part_counts,
                             "spatial_checks": spatial_checks,
                         }
-                    elif len(loose) > 0 or len(att) == 1 or span < 0.35 * beam_len:
+                    elif len(att) == 1:
                         return {
-                            "inferred_state": "state_2_green2blue",
+                            "inferred_state": "state_1_greenblue",
                             "confidence": 0.90,
                             "is_valid": False,
-                            "diagnostic": "ASSEMBLING: Please attach 2nd Blue foot to Green beam",
+                            "diagnostic": "ASSEMBLING: 1st foot attached. Please attach 2nd Blue foot to Green beam",
                             "part_counts": part_counts,
                             "spatial_checks": spatial_checks,
                         }
                     else:
                         return {
-                            "inferred_state": "state_2_green2blue",
+                            "inferred_state": "state_0_unstarted",
                             "confidence": 0.90,
                             "is_valid": False,
                             "diagnostic": "ASSEMBLING: Please attach Blue feet to Green beam",
                             "part_counts": part_counts,
                             "spatial_checks": spatial_checks,
                         }
-                else:
-                    return {
-                        "inferred_state": "state_1_greenblue",
-                        "confidence": 0.90,
-                        "is_valid": False,
-                        "diagnostic": "ASSEMBLING: Green beam detected. Please introduce 1st Blue foot.",
-                        "part_counts": part_counts,
-                        "spatial_checks": [{"rule": "Blue Foot Present", "passed": False}],
-                    }
 
             # Step 1: Green + 1 Blue base verified, waiting for 2nd Blue foot (Step 2)
             elif curr_idx == 1:
@@ -289,7 +312,7 @@ class AssemblyGraph:
                 gbox = greens[0]["bbox"]
                 if len(blues) == 1:
                     # Holding Step 1
-                    adj = are_adjacent(blues[0]["bbox"], gbox, max_gap=32)
+                    adj = are_adjacent(blues[0]["bbox"], gbox, max_gap=12)
                     return {
                         "inferred_state": "state_1_greenblue",
                         "confidence": 0.95,
@@ -300,7 +323,7 @@ class AssemblyGraph:
                     }
                 elif len(blues) >= 2:
                     # Step 2 candidate
-                    att = [b for b in blues if are_adjacent(b["bbox"], gbox, max_gap=35)]
+                    att = [b for b in blues if are_adjacent(b["bbox"], gbox, max_gap=12)]
                     loose = [b for b in blues if b not in att]
 
                     is_horiz = gbox[2] >= gbox[3]
@@ -375,7 +398,7 @@ class AssemblyGraph:
                 if len(reds) == 0:
                     # Holding Step 2
                     gbox = greens[0]["bbox"] if greens else None
-                    att = [b for b in blues if are_adjacent(b["bbox"], gbox, max_gap=32)] if gbox else []
+                    att = [b for b in blues if are_adjacent(b["bbox"], gbox, max_gap=12)] if gbox else []
                     same_side = True
                     if len(att) >= 2 and gbox:
                         is_horiz = gbox[2] >= gbox[3]
@@ -509,18 +532,18 @@ class AssemblyGraph:
                             "spatial_checks": spatial_checks,
                         }
 
-            # Step 4: First Yellow connected, waiting for 2nd Red block (stacked) (Step 5)
+            # Step 4: First Yellow connected, waiting for Step 5 (Blue block on Red torso, or legacy Red stack)
             elif curr_idx == 4:
-                if len(yellows) >= 2 and len(reds) < 2:
+                if len(yellows) >= 2 and len(reds) < 2 and len(blues) < 3:
                     return {
                         "inferred_state": "state_4_yellowred",
                         "confidence": 0.92,
                         "is_valid": False,
-                        "diagnostic": "INCORRECT ORDER: Second Yellow introduced before Second Red! Step 5 requires 2nd Red block.",
+                        "diagnostic": "INCORRECT ORDER: Second Yellow introduced before Blue torso block! Step 5 requires Blue block attached to Red block.",
                         "part_counts": part_counts,
-                        "spatial_checks": [{"rule": "Correct Next Part (2nd Red block)", "passed": False}],
+                        "spatial_checks": [{"rule": "Correct Next Part (Blue block)", "passed": False}],
                     }
-                if len(reds) < 2:
+                if len(blues) < 3 and len(reds) < 2:
                     # Holding Step 4: Verify 1 Red and 1 Yellow are attached
                     if len(reds) == 0 or len(yellows) == 0:
                         return {
@@ -552,77 +575,103 @@ class AssemblyGraph:
                             "spatial_checks": [{"rule": "Yellow-Red Joint", "passed": False}],
                         }
                 else:
-                    # Step 5 candidate: Second Red block stacked (Torso)
+                    # Step 5 candidate: Blue block attached onto Red block (or legacy 2nd Red block stacked)
                     gbox = greens[0]["bbox"] if greens else None
-                    reds_stacked = any(are_stacked(reds[i]["bbox"], reds[j]["bbox"], gbox=gbox, max_gap=48) for i in range(len(reds)) for j in range(i + 1, len(reds))) if len(reds) >= 2 else False
-                    spatial_checks.append({"rule": "Red Torso Stacked", "passed": reds_stacked})
-                    if reds_stacked:
+                    blue_torso_attached = any(
+                        are_stacked(b["bbox"], r["bbox"], gbox=gbox, max_gap=48) or are_adjacent(b["bbox"], r["bbox"], max_gap=48)
+                        for b in blues for r in reds
+                    ) if len(blues) >= 3 and reds else False
+                    reds_stacked = any(
+                        are_stacked(reds[i]["bbox"], reds[j]["bbox"], gbox=gbox, max_gap=48)
+                        for i in range(len(reds)) for j in range(i + 1, len(reds))
+                    ) if len(reds) >= 2 else False
+
+                    torso_ok = blue_torso_attached or reds_stacked
+                    spatial_checks.append({"rule": "Torso Block Attached", "passed": torso_ok})
+                    if torso_ok:
+                        diag = "PASS: Step 5 Complete (Blue block attached to Red block)" if blue_torso_attached else "PASS: Step 5 Complete (Both Red blocks stacked)"
                         return {
                             "inferred_state": "state_5_bothred",
                             "confidence": 0.95,
                             "is_valid": True,
-                            "diagnostic": "PASS: Step 5 Complete (Both Red blocks stacked)",
+                            "diagnostic": diag,
                             "part_counts": part_counts,
                             "spatial_checks": spatial_checks,
                         }
                     else:
+                        diag = "INCORRECT ATTACHMENT: Blue block must be attached directly on top of First Red block (forming the torso)" if len(blues) >= 3 else "INCORRECT ATTACHMENT: Second Red block must be stacked directly on top of First Red block (forming the torso)"
                         return {
                             "inferred_state": "state_5_bothred",
                             "confidence": 0.90,
                             "is_valid": False,
-                            "diagnostic": "INCORRECT ATTACHMENT: Second Red block must be stacked directly on top of First Red block (forming the torso)",
+                            "diagnostic": diag,
                             "part_counts": part_counts,
                             "spatial_checks": spatial_checks,
                         }
 
-            # Step 5: Both Reds stacked, waiting for 2nd Yellow block (Step 6)
+            # Step 5: Torso block attached (Blue on Red, or legacy Both Reds), waiting for 2nd Yellow block (Step 6)
             elif curr_idx == 5:
-                full_reds = [r for r in reds if r.get("area", r["bbox"][2] * r["bbox"][3]) >= 3500]
-                if len(full_reds) >= 3 and len(yellows) < 2:
-                    return {
-                        "inferred_state": "state_5_bothred",
-                        "confidence": 0.92,
-                        "is_valid": False,
-                        "diagnostic": "INCORRECT ORDER: Third Red introduced before Second Yellow! Step 6 requires Yellow block.",
-                        "part_counts": part_counts,
-                        "spatial_checks": [{"rule": "Correct Next Part (2nd Yellow block)", "passed": False}],
-                    }
+                is_blue_torso_config = (len(blues) >= 3)
+                if is_blue_torso_config:
+                    if len(reds) >= 2 and len(yellows) < 2:
+                        return {
+                            "inferred_state": "state_5_bothred",
+                            "confidence": 0.92,
+                            "is_valid": False,
+                            "diagnostic": "INCORRECT ORDER: Head Red block introduced before Second Yellow! Step 6 requires Yellow neck block.",
+                            "part_counts": part_counts,
+                            "spatial_checks": [{"rule": "Correct Next Part (2nd Yellow block)", "passed": False}],
+                        }
+                else:
+                    full_reds = [r for r in reds if r.get("area", r["bbox"][2] * r["bbox"][3]) >= 3500]
+                    if len(full_reds) >= 3 and len(yellows) < 2:
+                        return {
+                            "inferred_state": "state_5_bothred",
+                            "confidence": 0.92,
+                            "is_valid": False,
+                            "diagnostic": "INCORRECT ORDER: Third Red introduced before Second Yellow! Step 6 requires Yellow block.",
+                            "part_counts": part_counts,
+                            "spatial_checks": [{"rule": "Correct Next Part (2nd Yellow block)", "passed": False}],
+                        }
+
                 if len(yellows) < 2:
-                    # Holding Step 5: Verify red stack is intact and 1 yellow is present
-                    if len(reds) < 2 or len(yellows) < 1:
+                    # Holding Step 5: Verify torso stack is intact and 1 yellow is present
+                    gbox = greens[0]["bbox"] if greens else None
+                    blue_torso_attached = any(
+                        are_stacked(b["bbox"], r["bbox"], gbox=gbox, max_gap=48) or are_adjacent(b["bbox"], r["bbox"], max_gap=48)
+                        for b in blues for r in reds
+                    ) if len(blues) >= 3 and reds else False
+                    reds_stacked = any(
+                        are_stacked(reds[i]["bbox"], reds[j]["bbox"], gbox=gbox, max_gap=48)
+                        for i in range(len(reds)) for j in range(i + 1, len(reds))
+                    ) if len(reds) >= 2 else False
+                    torso_ok = blue_torso_attached or reds_stacked
+
+                    if not torso_ok or len(yellows) < 1:
+                        diag = "ASSEMBLING: Please attach Blue block onto Red block (torso)" if is_blue_torso_config else "ASSEMBLING: Please stack Second Red block onto First Red block (torso)"
                         return {
                             "inferred_state": "state_4_yellowred",
                             "confidence": 0.90,
                             "is_valid": False,
-                            "diagnostic": "ASSEMBLING: Please stack Second Red block onto First Red block (torso)",
+                            "diagnostic": diag,
                             "part_counts": part_counts,
-                            "spatial_checks": [{"rule": "Red Torso Stacked", "passed": False}],
+                            "spatial_checks": [{"rule": "Torso Stacked", "passed": False}],
                         }
-                    gbox = greens[0]["bbox"] if greens else None
-                    reds_stacked = any(are_stacked(reds[i]["bbox"], reds[j]["bbox"], gbox=gbox, max_gap=48) for i in range(len(reds)) for j in range(i + 1, len(reds))) if len(reds) >= 2 else False
-                    spatial_checks.append({"rule": "Red Torso Stacked", "passed": reds_stacked})
-                    if reds_stacked:
-                        return {
-                            "inferred_state": "state_5_bothred",
-                            "confidence": 0.95,
-                            "is_valid": True,
-                            "diagnostic": "PASS: Step 5 Complete (Both Red blocks stacked)",
-                            "part_counts": part_counts,
-                            "spatial_checks": spatial_checks,
-                        }
-                    else:
-                        return {
-                            "inferred_state": "state_5_bothred",
-                            "confidence": 0.90,
 
-                            "is_valid": False,
-                            "diagnostic": "INCORRECT ATTACHMENT: Second Red block must be stacked directly on top of First Red block (forming the torso)",
-                            "part_counts": part_counts,
-                            "spatial_checks": spatial_checks,
-                        }
+                    spatial_checks.append({"rule": "Torso Stacked", "passed": True})
+                    diag = "PASS: Step 5 Complete (Blue block attached to Red block)" if blue_torso_attached else "PASS: Step 5 Complete (Both Red blocks stacked)"
+                    return {
+                        "inferred_state": "state_5_bothred",
+                        "confidence": 0.95,
+                        "is_valid": True,
+                        "diagnostic": diag,
+                        "part_counts": part_counts,
+                        "spatial_checks": spatial_checks,
+                    }
                 else:
                     # Step 6 candidate: Second Yellow block attached to neck
-                    neck_attached = any(are_adjacent(y["bbox"], r["bbox"], max_gap=48) for y in yellows for r in reds)
+                    torso_blocks = reds + [b for b in blues if any(are_adjacent(b["bbox"], r["bbox"], max_gap=50) for r in reds)]
+                    neck_attached = any(are_adjacent(y["bbox"], t["bbox"], max_gap=48) for y in yellows for t in torso_blocks)
                     spatial_checks.append({"rule": "Yellow Neck Attached to Torso", "passed": neck_attached})
                     if neck_attached:
                         return {
@@ -638,16 +687,20 @@ class AssemblyGraph:
                             "inferred_state": "state_6_yellowafter2red",
                             "confidence": 0.90,
                             "is_valid": False,
-                            "diagnostic": "INCORRECT ATTACHMENT: Second Yellow block must be attached to the top of the Red torso stack to form the neck",
+                            "diagnostic": "INCORRECT ATTACHMENT: Second Yellow block must be attached to the top of the torso stack to form the neck",
                             "part_counts": part_counts,
                             "spatial_checks": spatial_checks,
                         }
 
-            # Step 6: Second Yellow attached, waiting for 3rd Red block (Step 7)
+            # Step 6: Second Yellow attached, waiting for Head Red block (Step 7)
             elif curr_idx == 6:
-                if len(reds) < 3:
+                is_blue_torso_config = (len(blues) >= 3)
+                req_reds_head = 2 if is_blue_torso_config else 3
+
+                if len(reds) < req_reds_head:
                     # Holding Step 6: Verify neck is attached to torso and parts are present
-                    if len(reds) < 2 or len(yellows) < 2:
+                    min_reds_holding = 1 if is_blue_torso_config else 2
+                    if len(reds) < min_reds_holding or len(yellows) < 2:
                         return {
                             "inferred_state": "state_5_bothred",
                             "confidence": 0.90,
@@ -656,7 +709,8 @@ class AssemblyGraph:
                             "part_counts": part_counts,
                             "spatial_checks": [{"rule": "Neck Assembly Intact", "passed": False}],
                         }
-                    neck_attached = any(are_adjacent(y["bbox"], r["bbox"], max_gap=48) for y in yellows for r in reds)
+                    torso_blocks = reds + [b for b in blues if any(are_adjacent(b["bbox"], r["bbox"], max_gap=50) for r in reds)]
+                    neck_attached = any(are_adjacent(y["bbox"], t["bbox"], max_gap=48) for y in yellows for t in torso_blocks)
                     spatial_checks.append({"rule": "Neck Assembly Intact", "passed": neck_attached})
                     if neck_attached:
                         return {
@@ -672,22 +726,29 @@ class AssemblyGraph:
                             "inferred_state": "state_6_yellowafter2red",
                             "confidence": 0.90,
                             "is_valid": False,
-                            "diagnostic": "INCORRECT ATTACHMENT: Second Yellow block must be attached to the top of the Red torso stack to form the neck",
+                            "diagnostic": "INCORRECT ATTACHMENT: Second Yellow block must be attached to the top of the torso stack to form the neck",
                             "part_counts": part_counts,
                             "spatial_checks": spatial_checks,
                         }
                 else:
-                    # Step 7 candidate: 3rd Red attached to head
-                    # The neck yellow block (farthest from feet) must connect to BOTH torso red and head red (>= 2 red connections)
-                    if len(blues) >= 1 and len(yellows) >= 2:
-                        feet_center = np.mean([(b["bbox"][0] + b["bbox"][2] // 2, b["bbox"][1] + b["bbox"][3] // 2) for b in blues], axis=0)
+                    # Step 7 candidate: Head Red attached to neck
+                    torso_blocks = [b for b in blues if any(are_adjacent(b["bbox"], r["bbox"], max_gap=50) for r in reds)]
+                    base_feet = [b for b in blues if b not in torso_blocks]
+                    ref_feet = base_feet if base_feet else blues
+                    if len(ref_feet) >= 1 and len(yellows) >= 2:
+                        feet_center = np.mean([(b["bbox"][0] + b["bbox"][2] // 2, b["bbox"][1] + b["bbox"][3] // 2) for b in ref_feet], axis=0)
                         sorted_y = sorted(yellows, key=lambda y: np.hypot(y["bbox"][0] + y["bbox"][2] // 2 - feet_center[0],
                                                                           y["bbox"][1] + y["bbox"][3] // 2 - feet_center[1]))
                         neck_yellow = sorted_y[-1]
                         reds_on_neck = [r for r in reds if are_adjacent(neck_yellow["bbox"], r["bbox"], max_gap=50)]
-                        head_attached = len(reds_on_neck) >= 2
+                        if is_blue_torso_config:
+                            head_attached = len(reds_on_neck) >= 1 and (
+                                any(are_adjacent(neck_yellow["bbox"], b["bbox"], max_gap=50) for b in torso_blocks) or len(reds_on_neck) >= 2
+                            )
+                        else:
+                            head_attached = len(reds_on_neck) >= 2
                     else:
-                        head_attached = any(len([r for r in reds if are_adjacent(y["bbox"], r["bbox"], max_gap=50)]) >= 2 for y in yellows)
+                        head_attached = any(len([r for r in reds if are_adjacent(y["bbox"], r["bbox"], max_gap=50)]) >= (1 if is_blue_torso_config else 2) for y in yellows)
 
                     spatial_checks.append({"rule": "Red Head Attached to Neck", "passed": head_attached})
                     if head_attached:
@@ -712,10 +773,12 @@ class AssemblyGraph:
             # Step 7: Third Red attached, waiting for 3rd Yellow block (Step 8 - Complete)
             elif curr_idx == 7:
                 is_step8 = (len(yellows) >= 3)
+                is_blue_torso_config = (len(blues) >= 3)
+                req_reds_head = 2 if is_blue_torso_config else 3
 
                 if not is_step8:
                     # Holding Step 7: Verify head is attached to neck
-                    if len(reds) < 3 or len(yellows) < 2:
+                    if len(reds) < req_reds_head or len(yellows) < 2:
                         return {
                             "inferred_state": "state_6_yellowafter2red",
                             "confidence": 0.90,
@@ -724,15 +787,23 @@ class AssemblyGraph:
                             "part_counts": part_counts,
                             "spatial_checks": [{"rule": "Head Assembly Intact", "passed": False}],
                         }
-                    if len(blues) >= 1 and len(yellows) >= 2:
-                        feet_center = np.mean([(b["bbox"][0] + b["bbox"][2] // 2, b["bbox"][1] + b["bbox"][3] // 2) for b in blues], axis=0)
+                    torso_blocks = [b for b in blues if any(are_adjacent(b["bbox"], r["bbox"], max_gap=50) for r in reds)]
+                    base_feet = [b for b in blues if b not in torso_blocks]
+                    ref_feet = base_feet if base_feet else blues
+                    if len(ref_feet) >= 1 and len(yellows) >= 2:
+                        feet_center = np.mean([(b["bbox"][0] + b["bbox"][2] // 2, b["bbox"][1] + b["bbox"][3] // 2) for b in ref_feet], axis=0)
                         sorted_y = sorted(yellows, key=lambda y: np.hypot(y["bbox"][0] + y["bbox"][2] // 2 - feet_center[0],
                                                                           y["bbox"][1] + y["bbox"][3] // 2 - feet_center[1]))
                         neck_yellow = sorted_y[-1]
                         reds_on_neck = [r for r in reds if are_adjacent(neck_yellow["bbox"], r["bbox"], max_gap=50)]
-                        head_attached = len(reds_on_neck) >= 2
+                        if is_blue_torso_config:
+                            head_attached = len(reds_on_neck) >= 1 and (
+                                any(are_adjacent(neck_yellow["bbox"], b["bbox"], max_gap=50) for b in torso_blocks) or len(reds_on_neck) >= 2
+                            )
+                        else:
+                            head_attached = len(reds_on_neck) >= 2
                     else:
-                        head_attached = any(len([r for r in reds if are_adjacent(y["bbox"], r["bbox"], max_gap=50)]) >= 2 for y in yellows)
+                        head_attached = any(len([r for r in reds if are_adjacent(y["bbox"], r["bbox"], max_gap=50)]) >= (1 if is_blue_torso_config else 2) for y in yellows)
                     spatial_checks.append({"rule": "Head Assembly Intact", "passed": head_attached})
                     if head_attached:
                         return {
@@ -754,7 +825,8 @@ class AssemblyGraph:
                         }
                 else:
                     # Step 8 candidate: Complete animal figure
-                    crown_attached = all(any(are_adjacent(y["bbox"], r["bbox"], max_gap=50) for r in reds) for y in yellows)
+                    torso_head_blocks = reds + [b for b in blues if any(are_adjacent(b["bbox"], r["bbox"], max_gap=50) for r in reds)]
+                    crown_attached = all(any(are_adjacent(y["bbox"], block["bbox"], max_gap=50) for block in torso_head_blocks) for y in yellows)
                     connected = all(
                         any(are_adjacent(d["bbox"], other["bbox"], max_gap=50) for other in detections if other != d)
                         for d in detections
@@ -791,7 +863,8 @@ class AssemblyGraph:
 
             # Step 8: Complete
             elif curr_idx == 8:
-                crown_attached = all(any(are_adjacent(y["bbox"], r["bbox"], max_gap=50) for r in reds) for y in yellows)
+                torso_head_blocks = reds + [b for b in blues if any(are_adjacent(b["bbox"], r["bbox"], max_gap=50) for r in reds)]
+                crown_attached = all(any(are_adjacent(y["bbox"], block["bbox"], max_gap=50) for block in torso_head_blocks) for y in yellows)
                 connected = all(
                     any(are_adjacent(d["bbox"], other["bbox"], max_gap=50) for other in detections if other != d)
                     for d in detections
@@ -848,11 +921,11 @@ class AssemblyGraph:
 
         # Spatial check on inferred state
         if inferred_state == "state_1_greenblue":
-            adj = any(are_adjacent(b["bbox"], greens[0]["bbox"], max_gap=32) for b in blues) if greens and blues else False
+            adj = any(are_adjacent(b["bbox"], greens[0]["bbox"], max_gap=12) for b in blues) if greens and blues else False
             is_valid = adj
             diagnostic = "PASS: Green beam + 1 Blue foot attached" if adj else "ASSEMBLING: Attach Blue foot to Green beam"
         elif inferred_state == "state_2_green2blue":
-            att = [b for b in blues if are_adjacent(b["bbox"], greens[0]["bbox"], max_gap=32)] if greens else []
+            att = [b for b in blues if are_adjacent(b["bbox"], greens[0]["bbox"], max_gap=12)] if greens else []
             same_side = True
             if len(att) >= 2 and greens:
                 gbox = greens[0]["bbox"]
@@ -880,14 +953,16 @@ class AssemblyGraph:
             diagnostic = "PASS: First Yellow block connected next to Red block" if is_valid else "INCORRECT ATTACHMENT: First Yellow block must be attached next to Red block"
         elif inferred_state == "state_5_bothred":
             gbox = greens[0]["bbox"] if greens else None
+            blue_torso = any(are_adjacent(b["bbox"], r["bbox"], max_gap=48) or are_stacked(b["bbox"], r["bbox"], gbox=gbox, max_gap=48) for b in blues for r in reds) if len(blues) >= 3 and reds else False
             reds_stacked = are_stacked(reds[0]["bbox"], reds[1]["bbox"], gbox=gbox, max_gap=48) if len(reds) >= 2 else False
-            is_valid = reds_stacked
-            diagnostic = "PASS: Both Red blocks stacked" if is_valid else "INCORRECT ATTACHMENT: Second Red block must be stacked on First Red block"
+            is_valid = blue_torso or reds_stacked
+            diagnostic = ("PASS: Step 5 Complete (Blue block attached to Red block)" if blue_torso else "PASS: Both Red blocks stacked") if is_valid else "INCORRECT ATTACHMENT: Torso block must be attached to Red block"
         elif inferred_state == "state_6_yellowafter2red":
             yellows_separate = not (len(yellows) >= 2 and are_adjacent(yellows[0]["bbox"], yellows[1]["bbox"], max_gap=25))
-            neck_attached = any(are_adjacent(y["bbox"], r["bbox"], max_gap=48) for y in yellows for r in reds)
+            torso_blocks = reds + [b for b in blues if any(are_adjacent(b["bbox"], r["bbox"], max_gap=50) for r in reds)]
+            neck_attached = any(are_adjacent(y["bbox"], t["bbox"], max_gap=48) for y in yellows for t in torso_blocks)
             is_valid = yellows_separate and neck_attached
-            diagnostic = "PASS: Second Yellow block attached to neck" if is_valid else "INCORRECT ASSEMBLY: Neck must attach to Red torso and Yellow blocks must remain separate"
+            diagnostic = "PASS: Second Yellow block attached to neck" if is_valid else "INCORRECT ASSEMBLY: Neck must attach to torso and Yellow blocks must remain separate"
         elif inferred_state == "state_7_finalred":
             yellows_separate = not (len(yellows) >= 2 and are_adjacent(yellows[0]["bbox"], yellows[1]["bbox"], max_gap=25))
             head_attached = any(are_adjacent(r["bbox"], y["bbox"], max_gap=50) for r in reds for y in yellows)
@@ -901,7 +976,8 @@ class AssemblyGraph:
                         if are_adjacent(yellows[i]["bbox"], yellows[j]["bbox"], max_gap=25):
                             yellows_separate = False
                             break
-            crown_attached = all(any(are_adjacent(y["bbox"], r["bbox"], max_gap=50) for r in reds) for y in yellows)
+            torso_head_blocks = reds + [b for b in blues if any(are_adjacent(b["bbox"], r["bbox"], max_gap=50) for r in reds)]
+            crown_attached = all(any(are_adjacent(y["bbox"], block["bbox"], max_gap=50) for block in torso_head_blocks) for y in yellows)
             connected = all(any(are_adjacent(d["bbox"], other["bbox"], max_gap=50) for other in detections if other != d) for d in detections)
             is_valid = yellows_separate and crown_attached and connected
             diagnostic = "PASS: Complete 9-part block figure verified!" if is_valid else "INCORRECT ASSEMBLY: Figure parts are not attached in the correct animal geometry"

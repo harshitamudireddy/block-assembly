@@ -48,7 +48,7 @@ STEP_TITLES = {
     "state_2_green2blue": "2. Green + 2 Blue Feet",
     "state_3_first_red": "3. First Red Block",
     "state_4_yellowred": "4. First Yellow Block",
-    "state_5_bothred": "5. Second Red Stack",
+    "state_5_bothred": "5. Blue Block on Red Stack",
     "state_6_yellowafter2red": "6. Second Yellow Block",
     "state_7_finalred": "7. Third Red Block",
     "state_8_complete": "8. Complete 9-Part Assembly",
@@ -99,7 +99,7 @@ VIDEO_MAPPING = {
     "state5_bothred.mp4": {
         "type": "state",
         "target": "state_5_bothred",
-        "desc": "Step 5: 2nd Red block stacked on top of 1st Red block"
+        "desc": "Step 5: Blue block attached to 1st Red block (or 2nd Red stack)"
     },
     "state6_yellowafter2red.mp4": {
         "type": "state",
@@ -125,8 +125,8 @@ EXPECTED_PARTS_PER_STATE = {
     "state_2_green2blue": {"min_total": 3, "parts": {"green_block": 1, "blue_block": 2}},
     "state_3_first_red": {"min_total": 4, "parts": {"green_block": 1, "blue_block": 2, "red_block": 1}},
     "state_4_yellowred": {"min_total": 5, "parts": {"green_block": 1, "blue_block": 2, "red_block": 1, "yellow_block": 1}},
-    "state_5_bothred": {"min_total": 6, "parts": {"green_block": 1, "blue_block": 2, "red_block": 2, "yellow_block": 1}},
-    "state_6_yellowafter2red": {"min_total": 6, "parts": {"blue_block": 2, "red_block": 2, "yellow_block": 2}},
+    "state_5_bothred": {"min_total": 6, "parts": {"green_block": 1, "blue_block": 2, "red_block": 1, "yellow_block": 1}},
+    "state_6_yellowafter2red": {"min_total": 6, "parts": {"blue_block": 2, "red_block": 1, "yellow_block": 2}},
     "state_7_finalred": {"min_total": 6, "parts": {"blue_block": 2, "red_block": 2, "yellow_block": 2}},
     "state_8_complete": {"min_total": 7, "parts": {"blue_block": 2, "red_block": 2, "yellow_block": 3}},
 }
@@ -137,8 +137,8 @@ NEXT_REQUIRED_PART = {
     1: "blue_block",    # 2nd blue foot
     2: "red_block",     # 1st red block
     3: "yellow_block",  # 1st yellow block
-    4: "red_block",     # 2nd red block (stacked)
+    4: "blue_block",    # 3rd blue block (stacked on red block)
     5: "yellow_block",  # 2nd yellow block
-    6: "red_block",     # 3rd red block (head extension)
+    6: "red_block",     # head red block
     7: "yellow_block",  # 3rd yellow block (final completion)
 }

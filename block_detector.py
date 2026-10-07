@@ -65,23 +65,62 @@ class BlockDetector:
         if crop.size == 0:
             return False
 
-        # Specific skin tone suppression for red_block
-        if cname == "red_block":
-            b, g, r = cv2.split(crop)
-            mr, mg, mb = float(np.mean(r)), float(np.mean(g)), float(np.mean(b))
-            if mr < 115 or mr <= mg or mr <= mb:
+        # Color & Skin-Tone Validation for plastic toy blocks vs human skin / clutter
+        b, g, r = cv2.split(crop)
+        mr = float(np.mean(r))
+        mg = float(np.mean(g))
+        mb = float(np.mean(b))
+        hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+        sat = float(np.mean(hsv[:, :, 1]))
+        ycrcb = cv2.cvtColor(crop, cv2.COLOR_BGR2YCrCb)
+        cr = ycrcb[:, :, 1]
+        cb = ycrcb[:, :, 2]
+        skin_mask = (cr >= 133) & (cr <= 175) & (cb >= 80) & (cb <= 128)
+        skin_ratio = float(np.sum(skin_mask)) / float(crop.shape[0] * crop.shape[1])
+
+        # 1. Yellow Block: High saturation, high Red+Green, low Blue.
+        # Strictly rejects human hands, palms, and fingers which have low saturation and high blue.
+        if cname == "yellow_block":
+            if sat < 80:
+                return False
+            if mr < 90 or mg < 70:
+                return False
+            # Yellow plastic has very low blue compared to red and green
+            if mr < 1.30 * mb or mg < 1.15 * mb:
+                return False
+            # Reject if human skin tone is present
+            if skin_ratio > 0.40:
                 return False
 
-            hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
-            sat = float(np.mean(hsv[:, :, 1]))
-
+        # 2. Red Block: Strong red dominance and saturation. Reject reddish skin.
+        elif cname == "red_block":
+            if mr < 118 or mr <= mg or mr <= mb:
+                return False
+            if sat < 75:
+                return False
+            if skin_ratio > 0.65:
+                return False
             if conf < 0.85:
-                # Require bright saturated red plastic and dominant red channel
-                if sat < 130 or mr < 125 or mr < 1.25 * mg or mr < 1.25 * mb:
+                if sat < 100 or mr < 1.20 * mg or mr < 1.20 * mb:
                     return False
-            else:
-                if sat < 70:
-                    return False
+
+        # 3. Blue Block: Blue dominant over red
+        elif cname == "blue_block":
+            if mb < 60:
+                return False
+            if mb < 1.02 * mr and mb < 1.02 * mg:
+                return False
+            if sat < 35:
+                return False
+
+        # 4. Green Block: Green dominant over red and blue
+        elif cname == "green_block":
+            if mg < 55:
+                return False
+            if mg < 1.02 * mr and mg < 1.02 * mb:
+                return False
+            if sat < 35:
+                return False
 
         return True
 
@@ -208,8 +247,9 @@ class BlockDetector:
         area = cw * ch
         aspect = max(cw, ch) / max(min(cw, ch), 1)
 
-        # Single 2x2 blocks are roughly square - never split single blocks!
-        if aspect < 1.25 and area < 8500:
+        # Geometrically, a single 2x2 Lego brick is roughly square (aspect < 1.30).
+        # Two stacked or side-by-side blocks ALWAYS have aspect >= 1.35. NEVER split single blocks!
+        if aspect < 1.32:
             return [detection]
 
         crop = img[y1:y2, x1:x2]
@@ -219,7 +259,7 @@ class BlockDetector:
         sobelx = np.abs(cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3))
 
         # Horizontal seam in middle 30% to 70% of height
-        r1, r2 = int(0.30 * ch), int(0.70 * ch)
+        r1, r2 = int(0.28 * ch), int(0.72 * ch)
         row_sums = np.sum(sobely, axis=1) if ch > 10 else np.array([0.0])
         best_r = r1 + int(np.argmax(row_sums[r1:r2])) if r2 > r1 else ch // 2
         r_peak = float(row_sums[best_r]) if r2 > r1 else 0.0
@@ -229,7 +269,7 @@ class BlockDetector:
         r_ratio = r_peak / max(r_global, 1e-3)
 
         # Vertical seam in middle 30% to 70% of width
-        c1, c2 = int(0.30 * cw), int(0.70 * cw)
+        c1, c2 = int(0.28 * cw), int(0.72 * cw)
         col_sums = np.sum(sobelx, axis=0) if cw > 10 else np.array([0.0])
         best_c = c1 + int(np.argmax(col_sums[c1:c2])) if c2 > c1 else cw // 2
         c_peak = float(col_sums[best_c]) if c2 > c1 else 0.0
@@ -242,26 +282,26 @@ class BlockDetector:
         split_pos = None
 
         if cw > ch:
-            # STRICT: Horizontal arrangement (side-by-side) can ONLY be cut vertically along X
-            if (cw >= 1.40 * ch and (c_contrast >= 1.45 or c_ratio >= 1.40)) or cw >= 1.65 * ch:
+            # Horizontal arrangement (side-by-side) cut vertically along X
+            if (cw >= 1.35 * ch and (c_contrast >= 1.25 or c_ratio >= 1.20)) or cw >= 1.60 * ch:
                 w1 = best_c
                 w2 = cw - w1
-                if min(w1, w2) / max(w1, w2) >= 0.40 and w1 >= 25 and w2 >= 25:
+                if min(w1, w2) / max(w1, w2) >= 0.30 and w1 >= 25 and w2 >= 25:
                     split_axis = "vertical"
                     split_pos = best_c
         elif ch > cw:
-            # STRICT: Vertical arrangement (stacked) can ONLY be cut horizontally along Y
-            if ch >= 1.60 * cw or (ch >= 1.48 * cw and r_contrast >= 1.65 and r_ratio >= 2.10):
+            # Vertical arrangement (stacked) cut horizontally along Y
+            if (ch >= 1.35 * cw and (r_contrast >= 1.25 or r_ratio >= 1.20)) or ch >= 1.60 * cw:
                 h1 = best_r
                 h2 = ch - h1
-                if min(h1, h2) / max(h1, h2) >= 0.50 and h1 >= 25 and h2 >= 25:
+                if min(h1, h2) / max(h1, h2) >= 0.30 and h1 >= 25 and h2 >= 25:
                     split_axis = "horizontal"
                     split_pos = best_r
         else:
-            if c_peak >= r_peak and c_contrast >= 1.70:
+            if c_peak >= r_peak and c_contrast >= 1.45 and aspect >= 1.35:
                 split_axis = "vertical"
                 split_pos = best_c
-            elif r_peak > c_peak and r_contrast >= 1.70:
+            elif r_peak > c_peak and r_contrast >= 1.45 and aspect >= 1.35:
                 split_axis = "horizontal"
                 split_pos = best_r
 
@@ -344,7 +384,9 @@ class BlockDetector:
 
         refined = []
         for d in detections:
-            if d.get("class_name") in ("red_block", "blue_block"):
+            # Blue blocks covering both feet can be split here;
+            # Red blocks are split with assembly context in ComponentDetector.corroborate_stacked_reds
+            if d.get("class_name") == "blue_block":
                 refined.extend(self.split_merged_block(d, img))
             else:
                 refined.append(d)
@@ -414,7 +456,7 @@ class BlockDetector:
         for i, d in enumerate(detections):
             bw, bh = d["bbox"][2], d["bbox"][3]
             area = d.get("area", bw * bh)
-            if bw < 55 or bh < 55 or area < 6500:
+            if bw < 32 or bh < 32 or area < 1400:
                 continue
             is_connected = any(touches_other(d["bbox"], other["bbox"]) for j, other in enumerate(detections) if j != i)
             if not is_connected:

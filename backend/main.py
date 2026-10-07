@@ -75,6 +75,8 @@ LATEST_HUD_FRAME: Optional[bytes] = None
 LATEST_FRAME_TIME: float = 0.0
 LATEST_ACTIVE_CYCLE_ID: Optional[str] = None
 DAILY_GOAL: int = 50
+ACTIVE_OPERATOR: Optional[dict] = None
+RESET_REQUESTED: bool = False
 
 
 # ============================================================
@@ -141,6 +143,94 @@ def supabase_request(
     return response.json()
 
 
+def resolve_operator(identifier: Optional[str] = None) -> Optional[dict]:
+    global ACTIVE_OPERATOR
+    if USE_LOCAL_MODE:
+        target = identifier or (ACTIVE_OPERATOR.get("operator_code") if ACTIVE_OPERATOR else "OP001")
+        for op in LOCAL_OPERATORS.values():
+            if op["id"] == target or op["operator_code"].upper() == target.upper() or op["name"].lower() == target.lower():
+                return op
+        new_op = {
+            "id": f"op_{target.lower().replace(' ', '_')}",
+            "operator_code": target.upper()[:10],
+            "name": f"Operator {target}",
+            "role": "operator",
+        }
+        LOCAL_OPERATORS[target] = new_op
+        return new_op
+
+    target = identifier or (ACTIVE_OPERATOR.get("id") if ACTIVE_OPERATOR else None) or "OP001"
+
+    # Check if target looks like a UUID
+    is_uuid = len(target) == 36 and target.count("-") == 4
+
+    # 1. Try matching by UUID if valid UUID format
+    if is_uuid:
+        try:
+            ops = supabase_request(
+                "GET",
+                "operators",
+                params={
+                    "id": f"eq.{target}",
+                    "select": "id,operator_code,name,role",
+                    "limit": "1",
+                },
+            )
+            if ops and len(ops) > 0:
+                return ops[0]
+        except Exception:
+            pass
+
+    # 2. Try matching by operator_code
+    try:
+        ops = supabase_request(
+            "GET",
+            "operators",
+            params={
+                "operator_code": f"eq.{target}",
+                "select": "id,operator_code,name,role",
+                "limit": "1",
+            },
+        )
+        if ops and len(ops) > 0:
+            return ops[0]
+    except Exception:
+        pass
+
+    # 3. Try matching by name
+    try:
+        ops = supabase_request(
+            "GET",
+            "operators",
+            params={
+                "name": f"ilike.{target}",
+                "select": "id,operator_code,name,role",
+                "limit": "1",
+            },
+        )
+        if ops and len(ops) > 0:
+            return ops[0]
+    except Exception:
+        pass
+
+    if ACTIVE_OPERATOR:
+        return ACTIVE_OPERATOR
+
+    # Fallback to first operator in database
+    try:
+        all_ops = supabase_request(
+            "GET",
+            "operators",
+            params={"select": "id,operator_code,name,role", "limit": "1"},
+        )
+        if all_ops and len(all_ops) > 0:
+            return all_ops[0]
+    except Exception:
+        pass
+
+    return None
+
+
 # ============================================================
 # AUTHENTICATION
 # ============================================================
@@ -165,10 +255,14 @@ def verify_cv_api_key(api_key: Optional[str]):
 # REQUEST MODELS
 # ============================================================
 
+class SetOperatorRequest(BaseModel):
+    operator_id: str
+
+
 class StartAssemblyRequest(BaseModel):
-    operator_id: str = Field(
-        ...,
-        description="Operator code, e.g. OP001",
+    operator_id: Optional[str] = Field(
+        None,
+        description="Operator code or UUID, e.g. OP001 or OP002",
     )
 
 
@@ -237,6 +331,50 @@ def health():
     }
 
 
+@app.get("/api/assembly/operator")
+def get_active_operator():
+    global ACTIVE_OPERATOR
+    if not ACTIVE_OPERATOR:
+        ACTIVE_OPERATOR = resolve_operator(None)
+    return {"status": "ok", "operator": ACTIVE_OPERATOR}
+
+
+@app.post("/api/assembly/operator")
+def set_active_operator(data: SetOperatorRequest):
+    global ACTIVE_OPERATOR
+    op = resolve_operator(data.operator_id)
+    if not op:
+        raise HTTPException(status_code=404, detail=f"Operator '{data.operator_id}' not found")
+    ACTIVE_OPERATOR = op
+
+    # If any assembly session is currently in progress, update its operator_id
+    if USE_LOCAL_MODE:
+        for sess in LOCAL_SESSIONS.values():
+            if sess.get("status") == "in_progress":
+                sess["operator_id"] = op["id"]
+                sess["operator_code"] = op.get("operator_code", "")
+                sess["operator_name"] = op.get("name", "")
+    else:
+        try:
+            active_sessions = supabase_request(
+                "GET",
+                "assembly_sessions",
+                params={"status": "eq.in_progress", "select": "id", "limit": "10"},
+            )
+            if active_sessions:
+                for s in active_sessions:
+                    supabase_request(
+                        "PATCH",
+                        "assembly_sessions",
+                        params={"id": f"eq.{s['id']}"},
+                        json_data={"operator_id": op["id"]},
+                    )
+        except Exception as e:
+            print(f"[Operator Sync Warning]: {e}")
+
+    return {"status": "ok", "operator": ACTIVE_OPERATOR}
+
+
 @app.post("/api/camera/frame")
 async def receive_frame(
     request: Request,
@@ -246,11 +384,20 @@ async def receive_frame(
     Receives compressed JPEG HUD frames from live_demo.py with all YOLO
     bounding boxes, labels, and PiP insets.
     """
-    global LATEST_HUD_FRAME, LATEST_FRAME_TIME
+    global LATEST_HUD_FRAME, LATEST_FRAME_TIME, RESET_REQUESTED
     verify_cv_api_key(x_cv_api_key)
     LATEST_HUD_FRAME = await request.body()
     LATEST_FRAME_TIME = time.time()
-    return {"status": "ok"}
+
+    reset_needed = RESET_REQUESTED
+    RESET_REQUESTED = False
+
+    return {
+        "status": "ok",
+        "reset_requested": reset_needed,
+        "operator_code": ACTIVE_OPERATOR.get("operator_code") if ACTIVE_OPERATOR else None,
+        "operator_id": ACTIVE_OPERATOR.get("id") if ACTIVE_OPERATOR else None,
+    }
 
 
 @app.get("/api/camera/hud_stream")
@@ -262,23 +409,35 @@ def hud_stream():
     def generate():
         last_sent_time = 0.0
         while True:
-            if LATEST_HUD_FRAME and (time.time() - LATEST_FRAME_TIME < 3.0):
-                # Yield when a new frame arrives or periodic heartbeat
-                if LATEST_FRAME_TIME != last_sent_time or (time.time() - last_sent_time > 1.0):
-                    last_sent_time = LATEST_FRAME_TIME
-                    frame_data = LATEST_HUD_FRAME
-                    yield (
-                        b"--frame\r\n"
-                        b"Content-Type: image/jpeg\r\n"
-                        b"Content-Length: " + str(len(frame_data)).encode() + b"\r\n\r\n"
-                        + frame_data
-                        + b"\r\n"
-                    )
-            time.sleep(0.02)
+            try:
+                if LATEST_HUD_FRAME and (time.time() - LATEST_FRAME_TIME < 3.0):
+                    # Yield when a new frame arrives or periodic heartbeat
+                    if LATEST_FRAME_TIME != last_sent_time or (time.time() - last_sent_time > 1.0):
+                        last_sent_time = LATEST_FRAME_TIME
+                        frame_data = LATEST_HUD_FRAME
+                        yield (
+                            b"--frame\r\n"
+                            b"Content-Type: image/jpeg\r\n"
+                            b"Content-Length: " + str(len(frame_data)).encode() + b"\r\n\r\n"
+                            + frame_data
+                            + b"\r\n"
+                        )
+                time.sleep(0.02)
+            except (GeneratorExit, StopIteration):
+                break
+            except Exception:
+                break
 
     return StreamingResponse(
         generate(),
         media_type="multipart/x-mixed-replace;boundary=frame",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+            "Connection": "close",
+            "Access-Control-Allow-Origin": "*",
+        },
     )
 
 
@@ -301,6 +460,13 @@ def camera_stream():
     return StreamingResponse(
         generate(),
         media_type="multipart/x-mixed-replace;boundary=--dcmjpeg",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+            "Connection": "close",
+            "Access-Control-Allow-Origin": "*",
+        },
     )
 
 
@@ -314,20 +480,20 @@ def start_assembly(
     x_cv_api_key: Optional[str] = Header(default=None),
 ):
     verify_cv_api_key(x_cv_api_key)
+    op = resolve_operator(data.operator_id)
+    if not op:
+        op = {"id": "op_001", "operator_code": "OP001", "name": "Station Lead", "role": "operator"}
 
     # --------------------------------------------------------
     # Local Mode Execution
     # --------------------------------------------------------
     if USE_LOCAL_MODE:
-        op = LOCAL_OPERATORS.get(data.operator_id)
-        if not op:
-            op = {
-                "id": f"op_{data.operator_id.lower()}",
-                "operator_code": data.operator_id,
-                "name": f"Operator {data.operator_id}",
-                "role": "operator",
-            }
-            LOCAL_OPERATORS[data.operator_id] = op
+        # Close any previous in_progress sessions
+        for s in LOCAL_SESSIONS.values():
+            if s.get("status") == "in_progress":
+                s["status"] = "fail"
+                s["failure_reason"] = "Superceded by new cycle"
+                s["end_time"] = datetime.now(timezone.utc).isoformat()
 
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
         random_part = secrets.token_hex(2).upper()
@@ -340,8 +506,8 @@ def start_assembly(
             "cycle_id": cycle_id,
             "cycle_number": cycle_number,
             "operator_id": op["id"],
-            "operator_code": op["operator_code"],
-            "operator_name": op["name"],
+            "operator_code": op.get("operator_code", "OP001"),
+            "operator_name": op.get("name", "Operator"),
             "start_time": datetime.now(timezone.utc).isoformat(),
             "end_time": None,
             "duration_seconds": 0,
@@ -359,8 +525,8 @@ def start_assembly(
                 "id": session_id,
                 "cycle_id": cycle_id,
                 "cycle_number": cycle_number,
-                "operator_id": op["operator_code"],
-                "operator_name": op["name"],
+                "operator_id": op.get("operator_code", "OP001"),
+                "operator_name": op.get("name", "Operator"),
                 "status": "in_progress",
             },
         }
@@ -368,32 +534,27 @@ def start_assembly(
     # --------------------------------------------------------
     # Supabase Mode Execution
     # --------------------------------------------------------
-    operators = supabase_request(
-        "GET",
-        "operators",
-        params={
-            "operator_code": f"eq.{data.operator_id}",
-            "select": "id,operator_code,name,role",
-            "limit": "1",
-        },
-    )
-
-    if not operators:
-        # Fallback to any registered operator (e.g. OP001) so session creation never breaks
-        all_ops = supabase_request(
+    # Close any existing in_progress sessions first
+    try:
+        active_sessions = supabase_request(
             "GET",
-            "operators",
-            params={"select": "id,operator_code,name,role", "limit": "1"},
+            "assembly_sessions",
+            params={"status": "eq.in_progress", "select": "id", "limit": "10"},
         )
-        if all_ops:
-            operator = all_ops[0]
-        else:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Operator '{data.operator_id}' not found and no default operators exist",
-            )
-    else:
-        operator = operators[0]
+        if active_sessions:
+            for s in active_sessions:
+                supabase_request(
+                    "PATCH",
+                    "assembly_sessions",
+                    params={"id": f"eq.{s['id']}"},
+                    json_data={
+                        "status": "fail",
+                        "failure_reason": "Superceded by new cycle",
+                        "end_time": datetime.now(timezone.utc).isoformat(),
+                    },
+                )
+    except Exception as e:
+        print(f"[Supabase start cleanup warning]: {e}")
 
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
     random_part = secrets.token_hex(2).upper()
@@ -415,7 +576,7 @@ def start_assembly(
         },
         json_data={
             "cycle_id": cycle_id,
-            "operator_id": operator["id"],
+            "operator_id": op["id"],
             "start_time": datetime.now(timezone.utc).isoformat(),
             "status": "in_progress",
             "states_completed": 0,
@@ -435,8 +596,8 @@ def start_assembly(
         "assembly": {
             "id": assembly[0]["id"],
             "cycle_id": cycle_id,
-            "operator_id": operator["operator_code"],
-            "operator_name": operator["name"],
+            "operator_id": op.get("operator_code") or op["id"],
+            "operator_name": op.get("name"),
             "status": "in_progress",
         },
     }
@@ -578,10 +739,13 @@ def assembly_event(
         data.status in ["advanced", "completed", "holding"]
         and data.state_index is not None
     ):
-        new_completed = max(
-            current_completed,
-            data.state_index,
-        )
+        if data.state_index == 0:
+            new_completed = 0
+        else:
+            new_completed = max(
+                current_completed,
+                data.state_index,
+            )
 
     if new_completed != current_completed:
         supabase_request(
@@ -744,14 +908,32 @@ def reset_assembly(
     data: Optional[ResetAssemblyRequest] = None,
     x_cv_api_key: Optional[str] = Header(default=None),
 ):
+    global RESET_REQUESTED
     verify_cv_api_key(x_cv_api_key)
+    # Only request CV client to reset if the command originated from dashboard frontend
+    if not x_cv_api_key:
+        RESET_REQUESTED = True
+
+    op_code = (data.operator_id if data else None)
+    op = resolve_operator(op_code) or {
+        "id": "op_001",
+        "operator_code": "OP001",
+        "name": "Station Lead",
+        "role": "operator",
+    }
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    random_part = secrets.token_hex(2).upper()
+    cycle_id = f"ASM-{timestamp}-{random_part}"
 
     if USE_LOCAL_MODE:
-        op_code = (data.operator_id if data else None) or "OP001"
-        op = LOCAL_OPERATORS.get(op_code, {"id": "op_001", "operator_code": "OP001", "name": "Harshal (Station Lead)", "role": "lead"})
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
-        random_part = secrets.token_hex(2).upper()
-        cycle_id = f"ASM-{timestamp}-{random_part}"
+        # Close any previous in_progress sessions
+        for s in LOCAL_SESSIONS.values():
+            if s.get("status") == "in_progress":
+                s["status"] = "fail"
+                s["failure_reason"] = "Reset to Step 0"
+                s["end_time"] = datetime.now(timezone.utc).isoformat()
+
         session_id = f"sess_{secrets.token_hex(4)}"
         cycle_number = len(LOCAL_SESSIONS) + 1
 
@@ -760,8 +942,8 @@ def reset_assembly(
             "cycle_id": cycle_id,
             "cycle_number": cycle_number,
             "operator_id": op["id"],
-            "operator_code": op["operator_code"],
-            "operator_name": op["name"],
+            "operator_code": op.get("operator_code", "OP001"),
+            "operator_name": op.get("name", "Operator"),
             "start_time": datetime.now(timezone.utc).isoformat(),
             "end_time": None,
             "duration_seconds": 0,
@@ -803,14 +985,96 @@ def reset_assembly(
                 "id": session_id,
                 "cycle_id": cycle_id,
                 "cycle_number": cycle_number,
-                "operator_id": op["operator_code"],
-                "operator_name": op["name"],
+                "operator_id": op.get("operator_code", "OP001"),
+                "operator_name": op.get("name", "Operator"),
                 "status": "in_progress",
                 "states_completed": 0,
             },
         }
 
-    return {"success": True, "message": "Reset called"}
+    # Supabase Mode Execution
+    # 1. Close any existing in_progress session as reset
+    try:
+        active_sessions = supabase_request(
+            "GET",
+            "assembly_sessions",
+            params={"status": "eq.in_progress", "select": "id", "limit": "10"},
+        )
+        if active_sessions:
+            for s in active_sessions:
+                supabase_request(
+                    "PATCH",
+                    "assembly_sessions",
+                    params={"id": f"eq.{s['id']}"},
+                    json_data={
+                        "status": "fail",
+                        "failure_reason": "Reset to Step 0",
+                        "end_time": datetime.now(timezone.utc).isoformat(),
+                    },
+                )
+    except Exception as e:
+        print(f"[Supabase reset cleanup warning]: {e}")
+
+    # 2. Insert new session at Step 0
+    now_iso = datetime.now(timezone.utc).isoformat()
+    new_session = supabase_request(
+        "POST",
+        "assembly_sessions",
+        params={
+            "select": (
+                "id,"
+                "cycle_id,"
+                "operator_id,"
+                "start_time,"
+                "status,"
+                "states_completed,"
+                "total_states"
+            )
+        },
+        json_data={
+            "cycle_id": cycle_id,
+            "operator_id": op["id"],
+            "start_time": now_iso,
+            "status": "in_progress",
+            "states_completed": 0,
+            "total_states": 9,
+        },
+    )
+
+    if not new_session:
+        raise HTTPException(status_code=500, detail="Failed to create assembly session on reset")
+
+    # 3. Insert Step 0 event
+    supabase_request(
+        "POST",
+        "assembly_events",
+        params={"select": "id"},
+        json_data={
+            "assembly_id": new_session[0]["id"],
+            "timestamp": now_iso,
+            "state_index": 0,
+            "state_name": "state_0_unstarted",
+            "state_title": "0. Unstarted",
+            "status": "holding",
+            "confidence": 1.0,
+            "is_valid": True,
+            "diagnostic": "Station Ready for Next Unit",
+        },
+    )
+
+    return {
+        "success": True,
+        "message": "Assembly reset to Step 0",
+        "assembly": {
+            "id": new_session[0]["id"],
+            "cycle_id": cycle_id,
+            "operator_id": op.get("operator_code") or op["id"],
+            "operator_name": op.get("name"),
+            "status": "in_progress",
+            "states_completed": 0,
+            "total_states": 9,
+        },
+    }
 
 
 # ============================================================
@@ -832,7 +1096,11 @@ def get_events(cycle_id: Optional[str] = None):
         return LOCAL_EVENTS[-50:][::-1]
     params = {"order": "timestamp.desc", "limit": "50"}
     if cycle_id:
-        params["cycle_id"] = f"eq.{cycle_id}"
+        sess = supabase_request("GET", "assembly_sessions", params={"cycle_id": f"eq.{cycle_id}", "select": "id", "limit": "1"})
+        if sess and len(sess) > 0:
+            params["assembly_id"] = f"eq.{sess[0]['id']}"
+        else:
+            return []
     return supabase_request("GET", "assembly_events", params=params)
 
 
@@ -908,3 +1176,8 @@ def get_latest():
 def root():
     """Redirects to the dedicated React/Vite dashboard running in frontend/."""
     return RedirectResponse(url="http://localhost:8080/")
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

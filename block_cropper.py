@@ -8,7 +8,7 @@ import cv2
 import numpy as np
 
 
-def crop_assembly(img, pad_ratio=0.22, min_size=180, ignore_hud=True):
+def crop_assembly(img, pad_ratio=0.22, min_size=180, ignore_hud=False):
     """
     Locates the active block assembly and returns a tight, square cropped image and bounding box.
     

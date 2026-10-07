@@ -44,6 +44,7 @@ class DashboardBridge:
         self.api_key = api_key if api_key is not None else os.getenv("CV_API_KEY", "assembly-local-key")
         self.cycle_id = None
         self.enabled = bool(self.api_url)
+        self.request_reset_flag = False
 
         self._latest_frame = None
         self._frame_lock = threading.Lock()
@@ -56,8 +57,51 @@ class DashboardBridge:
         self._starting_lock = threading.Lock()
 
         if self.enabled:
+            # Check backend for any local machine / localhost address
+            if any(h in self.api_url for h in ("localhost", "127.0.0.1", "192.168.", "0.0.0.0")):
+                self._ensure_backend_running()
             self._start_frame_streamer()
             self._start_event_worker()
+
+    def _ensure_backend_running(self):
+        import urllib.request
+        try:
+            with urllib.request.urlopen(f"{self.api_url}/health", timeout=0.8) as resp:
+                if resp.status == 200:
+                    return
+        except Exception:
+            pass
+
+        backend_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "backend")
+        if not os.path.exists(os.path.join(backend_dir, "main.py")):
+            return
+
+        print(f"[DashboardBridge] FastAPI backend at {self.api_url} is not running.")
+        print("[DashboardBridge] Automatically launching FastAPI backend in background...")
+        try:
+            import subprocess
+            import sys
+            port = "8000"
+            if ":" in self.api_url.split("//")[-1]:
+                port = self.api_url.split("//")[-1].split(":")[-1].split("/")[0]
+
+            subprocess.Popen(
+                [sys.executable, "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", port],
+                cwd=backend_dir,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            for _ in range(15):
+                time.sleep(0.2)
+                try:
+                    with urllib.request.urlopen(f"{self.api_url}/health", timeout=0.5) as resp:
+                        if resp.status == 200:
+                            print(f"[DashboardBridge] Backend successfully launched and reachable on port {port}!")
+                            return
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"[DashboardBridge WARN] Could not auto-launch backend: {e}")
 
     def update_frame(self, frame):
         """
@@ -84,14 +128,18 @@ class DashboardBridge:
             last_post_time = 0.0
 
             while not self._stop_event.is_set():
+                now = time.perf_counter()
+                if now - last_post_time < target_interval:
+                    time.sleep(0.01)
+                    continue
+
                 frame = None
                 with self._frame_lock:
                     if self._latest_frame is not None:
                         frame = self._latest_frame
                         self._latest_frame = None
 
-                now = time.perf_counter()
-                if frame is not None and (now - last_post_time >= target_interval):
+                if frame is not None:
                     last_post_time = now
                     try:
                         h, w = frame.shape[:2]
@@ -100,7 +148,17 @@ class DashboardBridge:
                             frame = cv2.resize(frame, (720, int(h * scale)), interpolation=cv2.INTER_LINEAR)
                         ret, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 68])
                         if ret:
-                            session.post(url, data=buf.tobytes(), headers=headers, timeout=0.35)
+                            resp = session.post(url, data=buf.tobytes(), headers=headers, timeout=0.35)
+                            if resp.ok:
+                                try:
+                                    rdata = resp.json()
+                                    if rdata.get("reset_requested"):
+                                        self.request_reset_flag = True
+                                    backend_op = rdata.get("operator_code") or rdata.get("operator_id")
+                                    if backend_op and backend_op != self.operator_id:
+                                        self.operator_id = backend_op
+                                except Exception:
+                                    pass
                     except Exception:
                         pass
                 else:
@@ -129,21 +187,23 @@ class DashboardBridge:
                 try:
                     if action == "START":
                         url = f"{self.api_url}/api/assembly/start"
-                        resp = session.post(
-                            url,
-                            json={"operator_id": self.operator_id},
-                            headers=headers,
-                            timeout=6.0,
-                        )
-                        if resp.ok:
-                            res_json = resp.json()
-                            self.cycle_id = res_json.get("assembly", {}).get("cycle_id")
-                            print(f"[DashboardBridge] Connected! Tracking Assembly Cycle: {self.cycle_id}")
-                            self._cycle_ready.set()
-                        else:
-                            print(f"[DashboardBridge ERROR] Could not register cycle: {resp.status_code} {resp.text}")
-                        with self._starting_lock:
-                            self._is_starting = False
+                        try:
+                            resp = session.post(
+                                url,
+                                json={"operator_id": self.operator_id},
+                                headers=headers,
+                                timeout=6.0,
+                            )
+                            if resp.ok:
+                                res_json = resp.json()
+                                self.cycle_id = res_json.get("assembly", {}).get("cycle_id")
+                                print(f"[DashboardBridge] Connected! Tracking Assembly Cycle: {self.cycle_id}")
+                                self._cycle_ready.set()
+                            else:
+                                print(f"[DashboardBridge ERROR] Could not register cycle: {resp.status_code} {resp.text}")
+                        finally:
+                            with self._starting_lock:
+                                self._is_starting = False
 
                     elif action == "EVENT":
                         if not self.cycle_id and self._is_starting:
@@ -158,22 +218,47 @@ class DashboardBridge:
 
                     elif action == "END":
                         cid = payload.get("cycle_id") or self.cycle_id
-                        if cid:
-                            payload["cycle_id"] = cid
-                            url = f"{self.api_url}/api/assembly/end"
-                            resp = session.post(url, json=payload, headers=headers, timeout=6.0)
-                            if resp.ok:
-                                print(f"[DashboardBridge] Cycle {cid} closed: status={payload.get('status')}")
-                            else:
-                                print(f"[DashboardBridge WARN] End POST returned {resp.status_code}")
+                        try:
+                            if cid:
+                                payload["cycle_id"] = cid
+                                url = f"{self.api_url}/api/assembly/end"
+                                resp = session.post(url, json=payload, headers=headers, timeout=6.0)
+                                if resp.ok:
+                                    print(f"[DashboardBridge] Cycle {cid} closed: status={payload.get('status')}")
+                                else:
+                                    print(f"[DashboardBridge WARN] End POST returned {resp.status_code}")
+                        finally:
+                            self.cycle_id = None
+                            self._cycle_ready.clear()
+                            with self._starting_lock:
+                                self._is_starting = False
 
-                        self.cycle_id = None
-                        self._cycle_ready.clear()
-                        with self._starting_lock:
-                            self._is_starting = False
+                    elif action == "RESET":
+                        url = f"{self.api_url}/api/assembly/reset"
+                        try:
+                            resp = session.post(
+                                url,
+                                json={"operator_id": self.operator_id},
+                                headers=headers,
+                                timeout=6.0,
+                            )
+                            if resp.ok:
+                                res_json = resp.json()
+                                self.cycle_id = res_json.get("assembly", {}).get("cycle_id")
+                                print(f"[DashboardBridge] Reset to Step 0! Tracking Cycle: {self.cycle_id}")
+                                self._cycle_ready.set()
+                            else:
+                                print(f"[DashboardBridge WARN] Reset POST returned {resp.status_code}: {resp.text}")
+                        except Exception as e:
+                            print(f"[DashboardBridge ERROR] Worker error on RESET: {e}")
+                        finally:
+                            with self._starting_lock:
+                                self._is_starting = False
 
                 except Exception as e:
                     print(f"[DashboardBridge ERROR] Worker error on {action}: {e}")
+                    with self._starting_lock:
+                        self._is_starting = False
                 finally:
                     self._event_queue.task_done()
 
@@ -195,6 +280,19 @@ class DashboardBridge:
         if wait:
             self._cycle_ready.wait(timeout=5.0)
 
+    def reset_cycle(self, wait=False):
+        if not self.enabled:
+            return
+
+        with self._starting_lock:
+            self._is_starting = True
+
+        self._cycle_ready.clear()
+        self._event_queue.put(("RESET", {"operator_id": self.operator_id}))
+
+        if wait:
+            self._cycle_ready.wait(timeout=5.0)
+
     @property
     def is_starting(self):
         with self._starting_lock:
@@ -203,6 +301,9 @@ class DashboardBridge:
     def log_event(self, state_index, state_name, status, confidence=1.0, diagnostic="", state_title=None, incoming_obj=None):
         if not self.enabled:
             return
+
+        if not self.cycle_id and not self.is_starting:
+            self.start_cycle()
 
         payload = {
             "state_index": state_index,
@@ -628,7 +729,7 @@ def run_video(video_source, detector, sm, dashboard=None):
                     prev_error_active = False
                     last_event_time = time.perf_counter()
                     if dashboard and dashboard.enabled:
-                        dashboard.start_cycle()
+                        dashboard.reset_cycle()
                         dashboard.log_event(
                             state_index=0,
                             state_name=sm.current_state(),
@@ -647,6 +748,10 @@ def run_video(video_source, detector, sm, dashboard=None):
                 state_changed = (sm.current_index != prev_state_idx)
                 error_changed = (sm.error_active != prev_error_active)
                 heartbeat_due = (now - last_event_time > 2.0)
+
+                # Workspace clear reset detected mid-sequence
+                if prev_state_idx > 0 and sm.current_index == 0 and not cycle_completed:
+                    dashboard.reset_cycle()
 
                 # Cycle completion trigger (Step 8 reached)
                 if sm.is_complete() and not cycle_completed:
@@ -694,6 +799,11 @@ def run_video(video_source, detector, sm, dashboard=None):
             cv2.imshow(window_name, annotated)
 
             key = cv2.waitKey(1) & 0xFF
+            remote_reset = False
+            if dashboard and dashboard.request_reset_flag:
+                dashboard.request_reset_flag = False
+                remote_reset = True
+
             do_reset = key in (ord("r"), ord("R"), 32) or button_events["reset"]
             do_snap = key in (ord("s"), ord("S")) or button_events["snap"]
 
@@ -702,6 +812,13 @@ def run_video(video_source, detector, sm, dashboard=None):
 
             if key in (ord("q"), ord("Q"), 27):
                 break
+            elif remote_reset:
+                sm.reset()
+                cycle_completed = False
+                prev_state_idx = 0
+                prev_error_active = False
+                last_event_time = 0.0
+                print("[INFO] Remote reset received from Dashboard: sequence reset to Step 0.")
             elif do_reset:
                 sm.reset()
                 cycle_completed = False
@@ -709,7 +826,7 @@ def run_video(video_source, detector, sm, dashboard=None):
                 prev_error_active = False
                 last_event_time = 0.0
                 if dashboard and dashboard.enabled:
-                    dashboard.start_cycle()
+                    dashboard.reset_cycle()
                     dashboard.log_event(
                         state_index=0,
                         state_name=sm.current_state(),

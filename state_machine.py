@@ -27,6 +27,7 @@ class AssemblyStateMachine:
         self.error_detail = ""
         self.skipped_step_index = None
         self.skip_streak = 0
+        self.spatial_error_streak = 0
         self.empty_workspace_frames = 0
         self.completion_frames = 0
         self.empty_after_complete_frames = 0
@@ -40,6 +41,7 @@ class AssemblyStateMachine:
         self.error_detail = ""
         self.skipped_step_index = None
         self.skip_streak = 0
+        self.spatial_error_streak = 0
         self.empty_workspace_frames = 0
         self.completion_frames = 0
         self.empty_after_complete_frames = 0
@@ -96,11 +98,17 @@ class AssemblyStateMachine:
             self.error_detail = ""
             return "assembling", diagnostic, consensus_state, ratio
 
-        # If spatial constraints are violated or wrong parts introduced, latch error
+        # If spatial constraints are violated or wrong parts introduced, require persistence
         if not is_valid_spatial and diagnostic and not diagnostic.startswith("PASS"):
-            self.error_active = True
-            self.error_detail = diagnostic
-            return "error", self.error_detail, consensus_state, ratio
+            self.spatial_error_streak += 1
+            if self.spatial_error_streak >= 3:
+                self.error_active = True
+                self.error_detail = diagnostic
+                return "error", self.error_detail, consensus_state, ratio
+            else:
+                return "holding", "Verifying structure...", consensus_state, ratio
+        else:
+            self.spatial_error_streak = 0
 
         # If assembly is in progress and workspace is temporarily clear (e.g. assembly in hand), hold without resetting
         if consensus_state == "state_0_unstarted" and self.current_index > 0:

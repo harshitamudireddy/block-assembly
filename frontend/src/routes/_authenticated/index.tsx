@@ -124,6 +124,19 @@ function eventStatusLabel(status: string) {
   }
 }
 
+function getBackendUrl() {
+  if (typeof window !== "undefined") {
+    return (
+      localStorage.getItem("block_assembly_backend_url") ||
+      (import.meta.env.VITE_BACKEND_URL as string | undefined) ||
+      (window.location.hostname
+        ? `http://${window.location.hostname}:8000`
+        : "http://localhost:8000")
+    );
+  }
+  return "http://localhost:8000";
+}
+
 function LiveMonitor() {
   const { user, isManager, profile } = Route.useRouteContext();
 
@@ -155,19 +168,47 @@ function LiveMonitor() {
 
       /*
        * 1. Active or latest assembly
-       * If a specific operator is selected in the filter, filter by operator_id.
+       * First check for any station assembly currently in_progress
        */
-      let query = supabase
+      const { data: activeSessions } = await supabase
         .from("assembly_sessions")
         .select("*")
-        .order("start_time", { ascending: false });
+        .eq("status", "in_progress")
+        .order("start_time", { ascending: false })
+        .limit(1);
 
-      if (selectedOperatorId !== "all") {
-        query = query.eq("operator_id", selectedOperatorId);
+      let targetAssembly: AssemblySession | null = null;
+
+      if (activeSessions && activeSessions.length > 0) {
+        targetAssembly = activeSessions[0];
+        // If an operator is selected in the dropdown and differs from the active session, assign it
+        if (
+          selectedOperatorId !== "all" &&
+          targetAssembly.operator_id !== selectedOperatorId
+        ) {
+          await supabase
+            .from("assembly_sessions")
+            .update({ operator_id: selectedOperatorId })
+            .eq("id", targetAssembly.id);
+          targetAssembly = {
+            ...targetAssembly,
+            operator_id: selectedOperatorId,
+          };
+        }
+      } else {
+        let query = supabase
+          .from("assembly_sessions")
+          .select("*")
+          .order("start_time", { ascending: false });
+
+        if (selectedOperatorId !== "all") {
+          query = query.eq("operator_id", selectedOperatorId);
+        }
+
+        const { data: latestSessions } = await query.limit(1);
+        targetAssembly = latestSessions?.[0] ?? null;
       }
 
-      const { data: latestSessions } = await query.limit(1);
-      const targetAssembly: AssemblySession | null = latestSessions?.[0] ?? null;
       setAssembly(targetAssembly);
 
       /*
@@ -228,15 +269,13 @@ function LiveMonitor() {
        * 4. Current operator for the active assembly
        */
       let currentOperator: Operator | null = null;
-      if (targetAssembly?.operator_id) {
+      if (selectedOperatorId !== "all") {
+        currentOperator =
+          allOperators?.find((op) => op.id === selectedOperatorId) ?? null;
+      } else if (targetAssembly?.operator_id) {
         currentOperator =
           allOperators?.find((op) => op.id === targetAssembly.operator_id) ??
           null;
-      }
-
-      if (!currentOperator && selectedOperatorId !== "all") {
-        currentOperator =
-          allOperators?.find((op) => op.id === selectedOperatorId) ?? null;
       }
 
       if (!currentOperator) {
@@ -278,7 +317,68 @@ function LiveMonitor() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [user?.id, selectedOperatorId]);
+  }, [selectedOperatorId]);
+
+  const handleOperatorChange = async (newOpId: string) => {
+    setSelectedOperatorId(newOpId);
+    const backendUrl = getBackendUrl();
+    try {
+      await fetch(`${backendUrl}/api/assembly/operator`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ operator_id: newOpId }),
+      });
+    } catch {
+      // Backend may be offline, ignore
+    }
+
+    if (newOpId !== "all") {
+      try {
+        await supabase
+          .from("assembly_sessions")
+          .update({ operator_id: newOpId })
+          .eq("status", "in_progress");
+      } catch (err) {
+        console.error("Failed to update active assembly operator:", err);
+      }
+    }
+
+    void loadLiveData();
+  };
+
+  const handleResetAssembly = async () => {
+    try {
+      setRefreshing(true);
+      const backendUrl = getBackendUrl();
+      const opId =
+        selectedOperatorId !== "all"
+          ? selectedOperatorId
+          : operator?.id || "OP001";
+      try {
+        await fetch(`${backendUrl}/api/assembly/reset`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ operator_id: opId }),
+        });
+      } catch {
+        // Fallback: update Supabase directly if backend is offline
+        await supabase
+          .from("assembly_sessions")
+          .update({
+            status: "fail",
+            failure_reason: "Reset to Step 0",
+            end_time: new Date().toISOString(),
+          })
+          .eq("status", "in_progress");
+      }
+
+      await loadLiveData();
+    } catch (err) {
+      console.error("Reset error:", err);
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   /*
    * Initial load + realtime subscriptions + heartbeat polling
@@ -382,23 +482,34 @@ function LiveMonitor() {
     return Math.max(0, (now - start) / 1000);
   }, [assembly, now]);
 
-  const progress = assembly
-    ? Math.min(
-      100,
-      Math.round(
-        (assembly.states_completed / Math.max(1, assembly.total_states)) *
-        100,
-      ),
-    )
-    : 0;
+  const isResetOrStep0 =
+    latestEvent?.state_index === 0 ||
+    (assembly?.status === "in_progress" && assembly?.states_completed === 0);
 
-  const currentState = latestEvent
-    ? latestEvent.state_title ||
-    latestEvent.state_name ||
-    `State ${latestEvent.state_index ?? "—"}`
-    : assembly
-      ? `State ${assembly.states_completed || 0}`
-      : "No active assembly";
+  const displayStatesCompleted = isResetOrStep0
+    ? 0
+    : (assembly?.states_completed ?? 0);
+
+  const progress =
+    assembly && !isResetOrStep0
+      ? Math.min(
+          100,
+          Math.round(
+            (displayStatesCompleted / Math.max(1, assembly.total_states)) *
+              100,
+          ),
+        )
+      : 0;
+
+  const currentState = isResetOrStep0
+    ? "0. Unstarted"
+    : latestEvent
+      ? latestEvent.state_title ||
+        latestEvent.state_name ||
+        `State ${latestEvent.state_index ?? "—"}`
+      : assembly
+        ? `State ${assembly.states_completed || 0}`
+        : "Station Ready for Assembly";
 
   /*
    * Today's KPI values
@@ -450,10 +561,10 @@ function LiveMonitor() {
       right={
         <div className="flex flex-wrap items-center gap-3">
           <div className="flex items-center gap-2">
-            <span className="text-xs text-muted-foreground font-medium">Filter Operator:</span>
+            <span className="text-xs text-muted-foreground font-medium">Operator:</span>
             <select
               value={selectedOperatorId}
-              onChange={(e) => setSelectedOperatorId(e.target.value)}
+              onChange={(e) => void handleOperatorChange(e.target.value)}
               className="h-8 rounded-md border border-border bg-background px-2 text-xs outline-none focus:border-ink cursor-pointer"
             >
               <option value="all">All Operators (Plant-wide)</option>
@@ -490,22 +601,32 @@ function LiveMonitor() {
                     ? "COMPLETED"
                     : assembly?.status === "fail"
                       ? "FAILED"
-                      : "NO ACTIVE ASSEMBLY"}
+                      : "IDLE — READY"}
             </div>
 
-            <Badge
-              tone={
-                assembly?.status === "fail"
-                  ? "danger"
-                  : isInProgress
-                    ? "success"
-                    : "success"
-              }
-            >
-              {isInProgress
-                ? "ACTIVE"
-                : assembly?.status?.toUpperCase() ?? "IDLE"}
-            </Badge>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void handleResetAssembly()}
+                title="Reset assembly cycle back to Step 0"
+                className="h-7 px-2.5 rounded border border-border bg-card hover:bg-muted text-xs font-medium text-foreground transition-colors cursor-pointer shadow-xs"
+              >
+                Reset (Step 0)
+              </button>
+              <Badge
+                tone={
+                  assembly?.status === "fail"
+                    ? "danger"
+                    : isInProgress
+                      ? "success"
+                      : "neutral"
+                }
+              >
+                {isInProgress
+                  ? "ACTIVE"
+                  : assembly?.status?.toUpperCase() ?? "IDLE"}
+              </Badge>
+            </div>
           </div>
 
           <div className="mt-5 flex justify-between text-[13px]">
@@ -513,8 +634,8 @@ function LiveMonitor() {
 
             <span>
               {assembly
-                ? `${assembly.states_completed} / ${assembly.total_states}`
-                : "—"}
+                ? `${displayStatesCompleted} / ${assembly.total_states}`
+                : "0 / 9"}
             </span>
           </div>
 

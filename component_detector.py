@@ -65,9 +65,7 @@ class ComponentDetector:
           - Single 2x2 blocks (aspect < 1.25 and area < 8500) are NEVER split.
         """
         is_step5_plus = (current_step_index >= 5) or (
-            current_step_index >= 4 and cls_pred in [
-                "state_5_bothred", "state_6_yellowafter2red", "state_7_finalred", "state_8_complete"
-            ]
+            current_step_index >= 4 and cls_pred == "state_5_bothred"
         )
         if not is_step5_plus or not detections or img is None:
             return detections
@@ -109,9 +107,15 @@ class ComponentDetector:
         aspect = max(cw, ch) / max(min(cw, ch), 1)
         target_area = target_r.get("area", cw * ch)
 
-        # NEVER split a single 2x2 red block!
-        if aspect < 1.25 and target_area < 8500:
-            return detections
+        # Single 2x2 red block protection:
+        # At Step 4, single red block has area < 22000 and aspect < 1.30.
+        # At Step 5+, two merged blocks have area >= 16000 or aspect >= 1.15.
+        if current_step_index < 5:
+            if aspect < 1.30 or target_area < 22000:
+                return detections
+        else:
+            if aspect < 1.15 and target_area < 16000:
+                return detections
 
         crop = img[y1:y2, x1:x2]
         gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
@@ -119,19 +123,17 @@ class ComponentDetector:
         sobelx = np.abs(cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3))
 
         # Check orientation strictly based on cw and ch:
-        # NEVER use gbox to invert or override the red block's physical geometry!
         if cw > ch:
             # WIDER than tall: side-by-side blocks!
-            # Cut axis is strictly VERTICAL along X (producing Left and Right blocks)
-            if cw < 1.35 * ch and target_area < 11000:
+            if cw < 1.18 * ch and target_area < 20000:
                 return detections
 
-            c1, c2 = int(0.30 * cw), int(0.70 * cw)
+            c1, c2 = int(0.25 * cw), int(0.75 * cw)
             col_sums = np.sum(sobelx, axis=0) if cw > 10 else [0]
             best_c = c1 + int(np.argmax(col_sums[c1:c2])) if c2 > c1 else cw // 2
             w1 = best_c
             w2 = bw - w1
-            if min(w1, w2) / max(w1, w2) < 0.40:
+            if min(w1, w2) / max(w1, w2) < 0.25:
                 w1 = cw // 2
                 w2 = bw - w1
 
@@ -162,16 +164,15 @@ class ComponentDetector:
 
         elif ch > cw:
             # TALLER than wide: stacked blocks!
-            # Cut axis is strictly HORIZONTAL along Y (producing Top and Bottom blocks)
-            if ch < 1.48 * cw and target_area < 11000:
+            if ch < 1.18 * cw and target_area < 20000:
                 return detections
 
-            r1, r2 = int(0.30 * ch), int(0.70 * ch)
+            r1, r2 = int(0.25 * ch), int(0.75 * ch)
             row_sums = np.sum(sobely, axis=1) if ch > 10 else [0]
             best_r = r1 + int(np.argmax(row_sums[r1:r2])) if r2 > r1 else ch // 2
             h1 = best_r
             h2 = bh - h1
-            if min(h1, h2) / max(h1, h2) < 0.45:
+            if min(h1, h2) / max(h1, h2) < 0.25:
                 h1 = ch // 2
                 h2 = bh - h1
 
@@ -240,19 +241,24 @@ class ComponentDetector:
             aspect = max(cw, ch) / max(min(cw, ch), 1)
             area = cw * ch
 
-            # Single foot protection
-            if aspect < 1.25 and area < 8500:
+            # Single foot protection: two physical feet along the beam require >= 135px
+            if cw < 135 and ch < 135:
                 result.append(bdet)
                 continue
 
             split_axis = None
-            if ch > cw:
-                # TALLER than wide: stacked along Y
-                if ch >= 1.28 * cw or (is_vertical_beam and ch >= 50) or area >= 10500:
+            if is_vertical_beam:
+                # Feet separate along Y (vertical beam)
+                if ch >= 135:
                     split_axis = "horizontal"
-            elif cw > ch:
-                # WIDER than tall: side-by-side along X
-                if cw >= 1.28 * ch or (is_horizontal_beam and cw >= 50) or area >= 10500:
+            elif is_horizontal_beam:
+                # Feet separate along X (horizontal beam)
+                if cw >= 135:
+                    split_axis = "vertical"
+            else:
+                if ch >= 145 and ch >= 1.30 * cw:
+                    split_axis = "horizontal"
+                elif cw >= 145 and cw >= 1.30 * ch:
                     split_axis = "vertical"
 
             if split_axis is None:
@@ -330,12 +336,12 @@ class ComponentDetector:
 
         return result
 
-    def cluster_feet_along_beam(self, blue_dets, green_det=None, max_dim=150):
+    def cluster_feet_along_beam(self, blue_dets, green_det=None, max_dim=135):
         """
         Groups blue block boxes that belong to the same physical foot.
         Because the green beam passes over/under the blue feet, each foot often produces
-        separate detections for its top and bottom exposed studs/halves.
-        Enforces physical unit dimensions (max_dim <= 150 px) and spatial proximity,
+        separate detections for its top and bottom exposed studs/halves or stud slivers.
+        Enforces physical unit dimensions (max_dim <= 135 px) and spatial proximity,
         ensuring distinct separated feet along the beam are NEVER merged into one.
         """
         if not blue_dets:
@@ -366,23 +372,23 @@ class ComponentDetector:
                 uw = x2 - x1
                 uh = y2 - y1
 
-                # Physical size constraint: union cannot exceed single foot dimensions
-                if uw > max_dim or uh > max_dim:
-                    continue
-
                 can_merge = False
-                # Significant overlap of same foot
-                if compute_iou(b, cb) > 0.20:
+                # 1. Significant overlap of same foot
+                if compute_iou(b, cb) > 0.35 and uw <= max_dim and uh <= max_dim:
+                    can_merge = True
+                # 2. Single foot pieces: two different feet along the beam physically require >= 160px
+                elif are_adjacent(b, cb, max_gap=15) and uw <= 135 and uh <= 135:
                     can_merge = True
                 elif gbox is not None:
-                    # Foot split across the green beam (top stud and bottom stud of the same foot)
+                    # Feet attach at opposite ends along the beam length (>70px apart).
+                    # Detections sharing the SAME coordinate along the beam axis belong to the SAME foot.
                     if is_horiz:
-                        # Beam is horizontal: same foot means matching X coordinate along beam
-                        if abs(bcx - ccx) <= 55 and uw <= 140 and (y1 <= gbox[1] + gbox[3] + 25 and y2 >= gbox[1] - 25):
+                        # Beam is horizontal: feet separate along X (>70px). Same foot has matching X (<= 25px).
+                        if abs(bcx - ccx) <= 25 and uw <= 135:
                             can_merge = True
                     else:
-                        # Beam is vertical: same foot means matching Y coordinate along beam
-                        if abs(bcy - ccy) <= 55 and uh <= 140 and (x1 <= gbox[0] + gbox[2] + 25 and x2 >= gbox[0] - 25):
+                        # Beam is vertical: feet separate along Y (>70px). Same foot has matching Y (<= 25px).
+                        if abs(bcy - ccy) <= 25 and uh <= 135:
                             can_merge = True
 
                 if can_merge:
@@ -422,7 +428,7 @@ class ComponentDetector:
             for f in feet:
                 is_sub = False
                 for kf in filtered_feet:
-                    if are_adjacent(f["bbox"], kf["bbox"], max_gap=25) or compute_iou(f["bbox"], kf["bbox"]) > 0.10:
+                    if are_adjacent(f["bbox"], kf["bbox"], max_gap=10) and compute_iou(f["bbox"], kf["bbox"]) > 0.25:
                         is_sub = True
                         break
                 if not is_sub:
@@ -467,7 +473,7 @@ class ComponentDetector:
                     continue
 
                 # NEVER merge two full-sized blocks! Only merge if one is a small stud sliver
-                if min(area_b, area_cb) >= 3500 and min(b[2], b[3]) >= 26 and min(cb[2], cb[3]) >= 26:
+                if min(area_b, area_cb) >= 1500 and min(b[2], b[3]) >= 26 and min(cb[2], cb[3]) >= 26:
                     continue
 
                 # Check proximity or overlap
@@ -515,7 +521,7 @@ class ComponentDetector:
                         is_dup = True
                         break
                     # Stud sliver attached to top/bottom of block
-                    if d["area"] < 3500 and are_adjacent(boxA, boxB, max_gap=15):
+                    if d["area"] < 1500 and are_adjacent(boxA, boxB, max_gap=15):
                         is_dup = True
                         break
                 if not is_dup:
@@ -622,15 +628,27 @@ class ComponentDetector:
             cand_conf = float(res_cls.probs.top1conf)
 
             # Sanity-check: reject hallucinations that require parts not physically present
+            n_red = sum(1 for d in cleaned_detections if d["class_name"] == "red_block")
+            n_yellow = sum(1 for d in cleaned_detections if d["class_name"] == "yellow_block")
+            n_blue = sum(1 for d in cleaned_detections if d["class_name"] == "blue_block")
+            n_green = sum(1 for d in cleaned_detections if d["class_name"] == "green_block")
+            n_total = len(cleaned_detections)
+
             is_physically_consistent = True
             if cand_pred in ["state_3_first_red", "state_4_yellowred", "state_5_bothred", "state_6_yellowafter2red", "state_7_finalred", "state_8_complete"]:
-                if "red_block" not in det_colors:
+                if n_red == 0:
                     is_physically_consistent = False
             if cand_pred in ["state_4_yellowred", "state_5_bothred", "state_6_yellowafter2red", "state_7_finalred", "state_8_complete"]:
-                if "yellow_block" not in det_colors:
+                if n_yellow == 0:
                     is_physically_consistent = False
-            if cand_pred in ["state_1_greenblue", "state_2_green2blue", "state_3_first_red"] and len(cleaned_detections) < 4:
-                if "green_block" not in det_colors:
+            if cand_pred == "state_8_complete":
+                if n_yellow < 3 or n_red < 1 or n_total < 5:
+                    is_physically_consistent = False
+            if cand_pred == "state_7_finalred":
+                if n_red == 0 or n_yellow == 0 or n_total < 4:
+                    is_physically_consistent = False
+            if cand_pred in ["state_1_greenblue", "state_2_green2blue"]:
+                if n_green == 0 or n_red > 0 or n_yellow > 0:
                     is_physically_consistent = False
 
             if is_physically_consistent:
@@ -654,8 +672,11 @@ class ComponentDetector:
                 curr_parts[d["class_name"]] = curr_parts.get(d["class_name"], 0) + 1
 
             inc_cls = incoming["class_name"]
-            # Only isolate if count strictly exceeds what the next step expects
-            if curr_parts.get(inc_cls, 0) > needed_parts.get(inc_cls, 0):
+            expected_next = NEXT_REQUIRED_PART.get(current_step_index)
+            # Only isolate if count strictly exceeds what the next step expects AND it is not the next required block
+            if inc_cls == expected_next:
+                assembly_detections = detections
+            elif curr_parts.get(inc_cls, 0) > needed_parts.get(inc_cls, 0):
                 assembly_detections = [d for d in detections if d != incoming]
             else:
                 assembly_detections = detections
@@ -671,18 +692,21 @@ class ComponentDetector:
 
         # Dual-Perception: Corroborate with classifier
         if cls_pred is not None:
-            # Check if spatial graph flagged an explicit physical violation (e.g. feet on opposite sides, illegal attachment)
-            is_explicit_violation = (not is_valid) and any(
+            # At base stages (Steps 0-2), parts MUST be physically attached without gap!
+            # The classifier must NEVER override detached base parts!
+            is_base_detached = (current_step_index in [0, 1, 2] and not is_valid)
+            is_explicit_violation = is_base_detached or any(
                 diagnostic.startswith(prefix) for prefix in ["INCORRECT", "WRONG"]
             )
 
-            # 1. High-confidence cropped classifier corroboration for target state
-            # Can resolve borderline bbox ambiguities, but CANNOT override an explicit physical defect!
+            # High-confidence cropped classifier corroboration for target state
+            # Resolves torso/head bbox stacking ambiguities at upper stages (Step 3-8),
+            # but NEVER overrides detached parts or base defects!
             if cls_conf >= 0.85 and cls_pred == target_state and not is_explicit_violation:
                 inferred_state = cls_pred
                 conf = max(conf, cls_conf)
                 is_valid = True
-                diagnostic = f"PASS: {target_state} verified by cropped inspection ({cls_conf*100:.1f}%)"
+                diagnostic = f"PASS: {target_state} verified ({cls_conf*100:.1f}%)"
             elif is_valid:
                 if graph_eval["inferred_state"] == cls_pred:
                     conf = min(0.99, max(conf, (conf + cls_conf) / 2.0))
@@ -690,9 +714,6 @@ class ComponentDetector:
                     inferred_state = "state_8_complete"
                     conf = max(conf, cls_conf)
                     diagnostic = "PASS: Complete 9-part block figure verified!"
-                elif cls_conf >= 0.80 and cls_pred == target_state and not is_explicit_violation:
-                    inferred_state = cls_pred
-                    conf = cls_conf
 
         # 7. Incoming Object Callout
         incoming_info = None

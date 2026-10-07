@@ -36,10 +36,11 @@ def interactive_menu():
         print("  4. Train YOLO State Classifier (Assembly Stages)")
         print("  5. Run Benchmark Evaluation on Validation Set")
         print("  6. Launch Live Inspection HUD (Camera / Video)")
+        print("  7. Start FastAPI Backend Performance Server")
         print("  0. Exit")
         print("=" * 55)
 
-        choice = input("Select an option [0-6]: ").strip()
+        choice = input("Select an option [0-7]: ").strip()
 
         if choice == "1":
             run_cmd("extract_frames.py")
@@ -53,19 +54,28 @@ def interactive_menu():
             run_cmd("evaluate.py")
         elif choice == "6":
             src = input("Enter video path, image path, or camera index (press Enter for default webcam '0'): ").strip()
+            dash = input("Connect to Dashboard on http://localhost:8000? (Y/n): ").strip().lower()
+            demo_args = []
+            if dash != "n":
+                demo_args.extend(["--dashboard", "http://localhost:8000"])
             if not src or src == "0":
-                run_cmd("live_demo.py")
+                pass
             elif src.lower().endswith((".mp4", ".mov", ".avi", ".mkv")):
-                run_cmd("live_demo.py", ["--video", src])
+                demo_args.extend(["--video", src])
             elif src.lower().endswith((".jpg", ".jpeg", ".png")):
-                run_cmd("live_demo.py", ["--image", src])
+                demo_args.extend(["--image", src])
             else:
-                run_cmd("live_demo.py", ["--camera", src])
+                demo_args.extend(["--camera", src])
+            run_cmd("live_demo.py", demo_args)
+        elif choice == "7":
+            import os
+            backend_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "backend")
+            run_cmd("-m", ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--app-dir", backend_dir])
         elif choice == "0":
             print("Exiting.")
             break
         else:
-            print("Invalid option. Please choose between 0 and 6.")
+            print("Invalid option. Please choose between 0 and 7.")
 
 
 def main():
@@ -77,12 +87,17 @@ def main():
     parser.add_argument("--train-cls", action="store_true", help="Train YOLO state classifier")
     parser.add_argument("--eval", action="store_true", help="Run benchmark evaluation")
     parser.add_argument("--demo", action="store_true", help="Launch live inspection HUD")
+    parser.add_argument("--backend", action="store_true", help="Start FastAPI backend performance server")
     parser.add_argument("--video", type=str, default=None, help="Video path for demo")
     parser.add_argument("--image", type=str, default=None, help="Image path for demo")
 
     args = parser.parse_args()
 
-    if args.extract:
+    if args.backend:
+        import os
+        backend_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "backend")
+        run_cmd("-m", ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--app-dir", backend_dir])
+    elif args.extract:
         run_cmd("extract_frames.py")
     elif args.prepare:
         run_cmd("prepare_dataset.py")
